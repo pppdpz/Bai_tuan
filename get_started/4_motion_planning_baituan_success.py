@@ -9,6 +9,10 @@ except ImportError:
     pass
 
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*os.fork().*")
+
 from typing import Literal
 
 import rootutils
@@ -49,13 +53,19 @@ class Args:
     num_envs: int = 1
     headless: bool = True
     solver: Literal["curobo", "pyroki"] = "pyroki"
+    
+    # ===== 新增：抓取点位偏移参数 =====
+    grasp_offset_x: float = 0.0      # X方向偏移（米）
+    grasp_offset_y: float = 0.0      # Y方向偏移（米）
+    grasp_offset_z: float = -0.0    # Z方向偏移（米），负值表示向下
+    use_normal_offset: bool = False  # 是否使用法向偏移（默认禁用）
+    normal_offset_dist: float = 0.01 # 沿法向偏移距离（米）
 
     def __post_init__(self):
-        log.info(f"Args: {self}")
+        pass
 
 
 args = tyro.cli(Args)
-log.info(f"Using IK solver: {args.solver}")
 
 # Install patches once
 install_inline_scene_patches()
@@ -88,8 +98,11 @@ robot_dict = {
         "rot": torch.tensor([1.0, 0.0, 0.0, 0.0]),
         "dof_pos": {
             "shoulder_pan_joint": 0.3,
-            "shoulder_lift_joint": -0.5,
+            # "shoulder_pan_joint": 3.14,
+            # "shoulder_lift_joint": -0.5,
+            # "shoulder_lift_joint": -1.57,
             "elbow_joint": -1.6,               
+            # "elbow_joint": 1.57,               
             "wrist_1_joint": 0.0,
             "wrist_2_joint": 0.0,             
             "wrist_3_joint": 0.0,             
@@ -132,19 +145,11 @@ for _jname, _angle in _fold_angles.items():
     _jid = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_JOINT, _jname)
     if _jid >= 0:
         _data.qpos[_model.jnt_qposadr[_jid]] = _angle
-        log.info(f"设置关节 {_jname} 到折叠角度: {_angle:.4f} rad")
-    else:
-        log.warning(f"未找到关节: {_jname}")
 
 # 更新物理状态
 mj.mj_forward(_model, _data)
-log.info("小卫星太阳翼已折叠到初始状态")
 
 # ===== 诊断：读取初始状态下的真实姿态 =====
-log.info("\n" + "="*60)
-log.info("诊断：读取机器人初始姿态")
-log.info("="*60)
-
 pinch_site_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_SITE, "pinch")
 wrist_body_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_BODY, "wrist_3_link")
 panel_tip_site_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_SITE, "panel4_tip_L")
@@ -166,25 +171,13 @@ if pinch_site_id >= 0 and wrist_body_id >= 0:
     pinch_pos = _data.site_xpos[pinch_site_id]
     wrist_pos = _data.xpos[wrist_body_id]
     
-    log.info(f"初始 TCP(pinch) 位置: [{pinch_pos[0]:.4f}, {pinch_pos[1]:.4f}, {pinch_pos[2]:.4f}]")
-    log.info(f"初始 TCP(pinch) 姿态 (w,x,y,z): [{pinch_quat_wxyz[0]:.4f}, {pinch_quat_wxyz[1]:.4f}, {pinch_quat_wxyz[2]:.4f}, {pinch_quat_wxyz[3]:.4f}]")
-    log.info(f"初始 wrist3 位置: [{wrist_pos[0]:.4f}, {wrist_pos[1]:.4f}, {wrist_pos[2]:.4f}]")
-    log.info(f"初始 wrist3 姿态 (w,x,y,z): [{wrist_quat_wxyz[0]:.4f}, {wrist_quat_wxyz[1]:.4f}, {wrist_quat_wxyz[2]:.4f}, {wrist_quat_wxyz[3]:.4f}]")
-    
     # 保存真实的 TCP 朝下姿态供后续使用 [w,x,y,z] 格式
     REAL_TCP_DOWN_QUAT_WXYZ = pinch_quat_wxyz.copy()
-    log.info(f"\n✓ 已保存真实 TCP 姿态到 REAL_TCP_DOWN_QUAT_WXYZ (w,x,y,z格式)")
 else:
-    log.error("无法找到 pinch site 或 wrist_3_link body")
     REAL_TCP_DOWN_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0])  # 回退值 [w,x,y,z]
 
 if panel_tip_site_id >= 0:
     _panel_tip_pos = _data.site_xpos[panel_tip_site_id]
-    log.info(f"初始 panel4_tip_L 位置: [{_panel_tip_pos[0]:.4f}, {_panel_tip_pos[1]:.4f}, {_panel_tip_pos[2]:.4f}]")
-else:
-    log.warning("未找到 site: panel4_tip_L，将使用硬编码目标点作为回退")
-
-log.info("="*60 + "\n")
 
 
 
@@ -213,6 +206,70 @@ def get_site_world_pos(_data, site_id):
     if site_id < 0:
         return None
     return _data.site_xpos[site_id].copy()
+
+
+def get_panel_normal_vector(_data, _model, panel_body_name="panel_4_L"):
+    """
+    计算太阳能板的法向量（指向外侧）
+    
+    Args:
+        _data: MuJoCo data
+        _model: MuJoCo model
+        panel_body_name: 太阳能板 body 名称
+    
+    Returns:
+        normal_vector: 单位法向量 [3] (numpy array)，失败返回 [0, 0, 1]
+    """
+    body_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_BODY, panel_body_name)
+    if body_id < 0:
+        return np.array([0.0, 0.0, 1.0])
+    
+    # 读取 body 的旋转矩阵（3x3）
+    body_xmat = _data.xmat[body_id].reshape(3, 3).copy()
+    
+    # 假设太阳能板的局部 Z 轴是法向（根据实际模型调整）
+    # 如果是 X 轴，改为 body_xmat[:, 0]
+    # 如果是 Y 轴，改为 body_xmat[:, 1]
+    normal_vector = body_xmat[:, 2]  # 局部 Z 轴
+    
+    # 归一化
+    normal_vector = normal_vector / np.linalg.norm(normal_vector)
+    
+    return normal_vector
+
+
+def compute_grasp_point_with_offset(
+    panel_tip_pos, 
+    offset_xyz, 
+    normal_vector=None, 
+    normal_offset=0.0
+):
+    """
+    计算带偏移的抓取点
+    
+    Args:
+        panel_tip_pos: panel_tip 的世界坐标 [3]
+        offset_xyz: 直角坐标系偏移 [x, y, z]
+        normal_vector: 太阳能板法向量 [3]（可选）
+        normal_offset: 沿法向的偏移距离（正值表示沿法向外侧）
+    
+    Returns:
+        grasp_pos: 最终抓取点 [3]
+    """
+    panel_tip = np.asarray(panel_tip_pos).reshape(3)
+    offset = np.asarray(offset_xyz).reshape(3)
+    
+    # 基础偏移：直角坐标系
+    grasp_pos = panel_tip + offset
+    
+    # 法向偏移（如果提供）
+    if normal_vector is not None and abs(normal_offset) > 1e-6:
+        normal = np.asarray(normal_vector).reshape(3)
+        normal = normal / np.linalg.norm(normal)  # 确保归一化
+        grasp_pos += normal * normal_offset
+    
+    return grasp_pos
+
 
 def world_pose_to_base_pose(world_pos, world_quat, base_pos, base_quat):
     """
@@ -352,8 +409,11 @@ def tcp_pose_to_wrist3_pose(tcp_pos, tcp_quat, robot_cfg):
     T_world_to_tcp = _T_from_pos_quat_wxyz(tcp_pos_np, tcp_quat_np)
 
     # 从统一配置链生成 (wrist3 -> tcp)
-    T_wrist3_to_tcp = _T_w3_tcp_from_cfg(robot_cfg)
+    # T_wrist3_to_tcp = _T_w3_tcp_from_cfg(robot_cfg)
     
+    # 改为：直接用 MuJoCo 实测值
+    T_wrist3_to_tcp = T_W3_TCP_MEASURED
+
     # 计算 wrist3 在世界坐标系中的位姿
     # T_world_to_wrist3 = T_world_to_tcp @ inv(T_wrist3_to_tcp)
     T_world_to_wrist3 = T_world_to_tcp @ np.linalg.inv(T_wrist3_to_tcp)
@@ -402,24 +462,56 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
     initial_pos_pinch = [0.2844, 0.1867, 1.1826]
 
     # 中间安全点（世界坐标系）
-    waypoint_pos_pinch = [0.3, 0.17, 1.10]
+    # waypoint_pos_pinch = [0.3, 0.17, 1.10]
+    waypoint_pos_pinch = [0.3, 0.07, 1.20]
 
     # 默认回退目标（世界坐标系，site 读取失败时使用）
     # 注意：panel4_tip_L 初始位置是 [0.3000, 0.2400, 1.2800]
     approach_pos_pinch = [0.3, 0.24, 1.43]   # 在抓取点上方 15cm
     grasp_pos_pinch = [0.3, 0.24, 1.28]      # 对准 panel4_tip_L
+    # grasp_pos_pinch = [0.3, 0.4, 1.28]      # 对准 panel4_tip_L
     deploy_pos_pinch = [0.3, -0.30, 1.30]    # 沿 -Y 方向拉动 54cm
-    retract_pos_pinch = [0.3, -0.30, 1.35]   # 上抬 5cm
+    retract_pos_pinch = [0.3, -0.30, 1.40]   # 上抬 10cm
 
-    # ===== 新增：使用 panel4_tip_L site 动态生成目标 =====
+
+    # ===== 修改：使用 panel4_tip_L site 动态生成目标（带偏移） =====
     if panel_tip_world_pos is not None:
         panel_tip = np.asarray(panel_tip_world_pos).reshape(3)
 
-        # grasp: 直接对准 panel4_tip_L
+        # ===== 新增：读取太阳能板法向量（仅在启用时） =====
+        panel_normal = None
+        if hasattr(get_trajectory_targets, '_model') and hasattr(get_trajectory_targets, '_data'):
+            if hasattr(get_trajectory_targets, '_args') and get_trajectory_targets._args.use_normal_offset:
+                panel_normal = get_panel_normal_vector(
+                    get_trajectory_targets._data, 
+                    get_trajectory_targets._model, 
+                    panel_body_name="panel_4_L"  # 根据实际模型调整
+                )
+        
+        # ===== 新增：从 args 读取偏移参数 =====
+        if hasattr(get_trajectory_targets, '_args'):
+            _args = get_trajectory_targets._args
+            offset_xyz = [_args.grasp_offset_x, _args.grasp_offset_y, _args.grasp_offset_z]
+            use_normal = _args.use_normal_offset
+            normal_dist = _args.normal_offset_dist if use_normal else 0.0
+        else:
+            # 回退默认值
+            offset_xyz = [0.0, 0.0, -0.02]
+            normal_dist = 0.0
+            panel_normal = None
+        
+        # ===== 核心修改：计算带偏移的抓取点 =====
+        grasp_pos_pinch_np = compute_grasp_point_with_offset(
+            panel_tip, 
+            offset_xyz, 
+            normal_vector=panel_normal,
+            normal_offset=normal_dist
+        )
+        
         grasp_pos_pinch = [
-            float(panel_tip[0]),
-            float(panel_tip[1]),
-            float(panel_tip[2]),
+            float(grasp_pos_pinch_np[0]),
+            float(grasp_pos_pinch_np[1]),
+            float(grasp_pos_pinch_np[2]),
         ]
 
         # approach: 在抓取点上方保留安全高度
@@ -440,10 +532,8 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         retract_pos_pinch = [
             deploy_pos_pinch[0],
             deploy_pos_pinch[1],
-            deploy_pos_pinch[2] + 0.05,
+            deploy_pos_pinch[2] + 0.10,
         ]
-    elif step == 0:
-        log.warning("panel4_tip_L 位置不可用，回退到硬编码轨迹目标")
 
     # 方案B: 直接使用 pinch/TCP 坐标定义轨迹
     # 在函数末尾通过 ee_pose_from_tcp_pose() 转换为 wrist_3_link 坐标
@@ -452,6 +542,10 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
     grasp_pos = grasp_pos_pinch
     deploy_pos = deploy_pos_pinch
     retract_pos = retract_pos_pinch
+
+    inset = 0.04  # 2cm
+    # 假设“向内”是世界系 -y；如果方向反了就改成 +inset
+    grasp_pos_inset = grasp_pos + np.array([0.0, inset, 0.0])
 
     # ===== 阶段1a: 移动到中间点 (步数 0-30) =====
     if step < 30:
@@ -488,22 +582,26 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         ]
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-        gripper_width = 1.0  # 保持打开
-    
-    # ===== 阶段3: 抓取 (步数 70-90) =====
+        gripper_width = 1.0  # 保持打开    
+
+    # ===== 阶段3: 抓取 (70-90) =====
     elif step < 90:
         t = (step - 70) / 20.0
-        # 位置保持不变
-        ee_pos = grasp_pos
-        ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
+        ee_pos = grasp_pos_inset
+        ee_quat = tcp_quat_wxyz
+        gripper_width = 1.0 - t * 1.0
+
+    # ===== 阶段3.5: 抓取后稳固保持 (90-120) =====
+    elif step < 120:
+        ee_pos = grasp_pos_inset
+        ee_quat = tcp_quat_wxyz
+        gripper_width = 0.0
 
 
-        # 夹爪逐渐闭合，从1.0到0.2（留20%开口，避免夹坏太阳能板）
-        gripper_width = 1.0 - t * 0.8
-    
-    # ===== 阶段4: 展开 (步数 90-170) ⭐ 关键阶段 =====
-    elif step < 170:
-        t = (step - 90) / 80.0
+    # ===== 阶段4: 展开 (步数 120-320) ⭐ 关键阶段 =====
+    # 将原来的80步延长到200步，放慢展开速度
+    elif step < 320:
+        t = (step - 120) / 200.0
         # 使用S曲线插值，提供平滑的运动
         t_smooth = smooth_interpolation(t)
         # 从抓取位置平滑移动到展开位置
@@ -514,22 +612,30 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         ]
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-
-        gripper_width = 0.2  # 保持闭合状态
+        # gripper_width = 0.2  # 保持闭合状态
+        gripper_width = 0.0  # 保持闭合状态
     
-    # ===== 阶段5: 释放 (步数 170-190) =====
-    elif step < 190:
-        t = (step - 170) / 20.0
+    # ===== 阶段5: 释放 (步数 320-340) =====
+    elif step < 340:
+        t = (step - 320) / 20.0
         # 位置保持在展开位置
         ee_pos = deploy_pos
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-        # 夹爪逐渐打开，从0.2到1.0
-        gripper_width = 0.2 + t * 0.8
+        # 夹爪逐渐打开，从0.0到1.0
+        # gripper_width = 0.2 + t * 0.8
+        gripper_width = 0.0 + t * 1.0
+        
+    # ===== 新增：阶段5.5: 释放后稳固保持 (步数 340-370) =====
+    elif step < 370:
+        # 等待手指完全离物
+        ee_pos = deploy_pos
+        ee_quat = tcp_quat_wxyz
+        gripper_width = 1.0
     
-    # ===== 阶段6: 撤离 (步数 190-220) =====
-    else:
-        t = (step - 190) / 30.0
+    # ===== 阶段6: 撤离 (步数 370-400) =====
+    elif step < 400:
+        t = (step - 370) / 30.0
         # 从展开位置移动到撤离位置
         ee_pos = [
             deploy_pos[0] + t * (retract_pos[0] - deploy_pos[0]),
@@ -539,18 +645,32 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
         gripper_width = 1.0  # 保持打开
+    else:
+        # 保持撤离位置
+        ee_pos = retract_pos
+        ee_quat = tcp_quat_wxyz
+        gripper_width = 1.0
     
     # 方案B: 使用 TCP 坐标定义轨迹，然后转换为 wrist3 坐标
     ee_pos_tcp = torch.tensor([ee_pos], device=device, dtype=torch.float32)
     ee_quat_tcp = torch.tensor([ee_quat], device=device, dtype=torch.float32)  # [w,x,y,z] 格式
 
-        
+    # 在 tcp_pose_to_wrist3_pose 调用前后
+    ee_pos_tcp_debug = ee_pos_tcp.clone()   # 转换前，真正的 TCP 目标
+    ee_quat_tcp_debug = ee_quat_tcp.clone()
+
     # 使用经过验证的转换函数（误差 0.0000mm）
     ee_pos_target, ee_quat_target = tcp_pose_to_wrist3_pose(
         ee_pos_tcp,
         ee_quat_tcp,
         robot_cfg,
     )
+
+    # 加在这里
+    if step in (20, 40, 70):
+        print(f"  [内部] TCP目标(真正) pos : {ee_pos_tcp_debug.detach().cpu().numpy().flatten()}")
+        print(f"  [内部] wrist3目标(转换后): {ee_pos_target.detach().cpu().numpy().flatten()}")
+        print(f"  [内部] 两者差值          : {(ee_pos_target - ee_pos_tcp_debug).detach().cpu().numpy().flatten()}")
 
     return ee_pos_target, ee_quat_target, gripper_width
 
@@ -561,25 +681,23 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
 robot_base_pos_world = robot_dict["ur5e_2f85"]["pos"]  # torch.tensor([1.0, 0.0, 0.895])
 robot_base_quat_world = robot_dict["ur5e_2f85"]["rot"]  # torch.tensor([1.0, 0.0, 0.0, 0.0])
 
+# 【修改这里】：专门给 IK 传入转了180度的虚拟 Base 四元数
+# 抵消 URDF 和 MJCF 的内部原点反差
+# robot_base_quat_world = torch.tensor([0.0, 0.0, 0.0, 1.0]) 
+
 # 确保在正确的设备上
 robot_base_pos_world = robot_base_pos_world.to(device).unsqueeze(0)  # [1, 3]
 robot_base_quat_world = robot_base_quat_world.to(device).unsqueeze(0)  # [1, 4] (w,x,y,z)
 
-log.info(f"机器人 base_link 世界坐标: pos={robot_base_pos_world[0].cpu().numpy()}, quat={robot_base_quat_world[0].cpu().numpy()}")
+
 
 # ===== 启动时一次性自检：测量链路 vs 配置链路 =====
 if pinch_site_id >= 0 and wrist_body_id >= 0:
-    T_w3_tcp_meas = _measure_T_w3_tcp(_data, wrist_body_id, pinch_site_id)
-    T_w3_tcp_pred = _T_w3_tcp_from_cfg(robot)
-    T_err = np.linalg.inv(T_w3_tcp_pred) @ T_w3_tcp_meas
-    pos_err_m = np.linalg.norm(T_err[:3, 3])
-    rot_err_deg = np.degrees(np.linalg.norm(R.from_matrix(T_err[:3, :3]).as_rotvec()))
-    log.info(
-        f"[TCP链路自检] pos_err={pos_err_m*1000:.3f} mm, rot_err={rot_err_deg:.3f} deg "
-        f"(阈值: 1.0 mm / 0.5 deg)"
-    )
-    if pos_err_m > 1e-3 or rot_err_deg > 0.5:
-        raise RuntimeError("TCP链路自检失败：cfg/bridge 与实测不一致，请重新标定桥接常量")
+    T_W3_TCP_MEASURED = _measure_T_w3_tcp(_data, wrist_body_id, pinch_site_id)
+    pos_offset = np.linalg.norm(T_W3_TCP_MEASURED[:3, 3])
+    if pos_offset < 0.05:  # pinch 到 wrist3 至少应该有 5cm 偏移
+        raise RuntimeError(f"TCP测量异常：偏移量 {pos_offset*1000:.1f}mm 过小，请检查 site/body ID")
+
 else:
     raise RuntimeError("无法执行 TCP链路自检：缺少 pinch site 或 wrist_3_link body")
 
@@ -587,12 +705,178 @@ else:
 
 # 在主循环开始前，初始化目标关节角度
 target_joint_angles = None  # 添加在 for step in range(220): 之前
-# ===== 新增：创建关节角度记录列表 =====
-joint_2_angles_record = []  # 记录每一步的第二关节角度
+
+# ===== 新增：将参数传递给轨迹生成函数 =====
+# 通过函数属性传递，避免修改函数签名
+get_trajectory_targets._args = args
+get_trajectory_targets._model = _model
+get_trajectory_targets._data = _data
+
+# ============================================================
+# 诊断打印：坐标系与变换链路验证
+# ============================================================
+import mujoco as mj
+from scipy.spatial.transform import Rotation as R
+
+print("\n" + "="*70)
+print("坐标系诊断报告")
+print("="*70)
+
+# --- (A) MuJoCo 世界坐标系中的关键位置 ---
+print("\n--- (A) MuJoCo 世界坐标：各关键 body/site 的绝对位姿 ---")
+
+# A1: 机器人底座 (ur5e_base)
+base_body_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_BODY, "ur5e_base")
+if base_body_id >= 0:
+    base_pos_mj = _data.xpos[base_body_id].copy()
+    base_mat_mj = _data.xmat[base_body_id].reshape(3, 3).copy()
+    base_quat_xyzw = R.from_matrix(base_mat_mj).as_quat()
+    base_quat_wxyz = [base_quat_xyzw[3], base_quat_xyzw[0], base_quat_xyzw[1], base_quat_xyzw[2]]
+    print(f"  ur5e_base  pos(world): {base_pos_mj}")
+    print(f"  ur5e_base quat(wxyz): {base_quat_wxyz}")
+else:
+    print("  [WARN] ur5e_base body not found")
+
+# A2: wrist_3_link
+if wrist_body_id >= 0:
+    w3_pos = _data.xpos[wrist_body_id].copy()
+    w3_mat = _data.xmat[wrist_body_id].reshape(3, 3).copy()
+    w3_quat_xyzw = R.from_matrix(w3_mat).as_quat()
+    w3_quat_wxyz = [w3_quat_xyzw[3], w3_quat_xyzw[0], w3_quat_xyzw[1], w3_quat_xyzw[2]]
+    print(f"  wrist_3_link  pos(world): {w3_pos}")
+    print(f"  wrist_3_link quat(wxyz): {w3_quat_wxyz}")
+
+# A3: flange
+flange_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_BODY, "flange")
+if flange_id >= 0:
+    fl_pos = _data.xpos[flange_id].copy()
+    fl_mat = _data.xmat[flange_id].reshape(3, 3).copy()
+    fl_quat_xyzw = R.from_matrix(fl_mat).as_quat()
+    fl_quat_wxyz = [fl_quat_xyzw[3], fl_quat_xyzw[0], fl_quat_xyzw[1], fl_quat_xyzw[2]]
+    print(f"  flange        pos(world): {fl_pos}")
+    print(f"  flange       quat(wxyz): {fl_quat_wxyz}")
+
+# A4: pinch site (TCP)
+if pinch_site_id >= 0:
+    tcp_pos_mj = _data.site_xpos[pinch_site_id].copy()
+    tcp_mat_mj = _data.site_xmat[pinch_site_id].reshape(3, 3).copy()
+    tcp_quat_xyzw = R.from_matrix(tcp_mat_mj).as_quat()
+    tcp_quat_wxyz = [tcp_quat_xyzw[3], tcp_quat_xyzw[0], tcp_quat_xyzw[1], tcp_quat_xyzw[2]]
+    print(f"  pinch(TCP)    pos(world): {tcp_pos_mj}")
+    print(f"  pinch(TCP)   quat(wxyz): {tcp_quat_wxyz}")
+
+# A5: panel4_tip_L site
+if panel_tip_site_id >= 0:
+    pt_pos = _data.site_xpos[panel_tip_site_id].copy()
+    print(f"  panel4_tip_L  pos(world): {pt_pos}")
+
+# A6: tcp site (flange 上的 tcp site，不是 pinch)
+tcp_site_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_SITE, "tcp")
+if tcp_site_id >= 0:
+    tcp_site_pos = _data.site_xpos[tcp_site_id].copy()
+    print(f"  tcp site      pos(world): {tcp_site_pos}")
+
+
+# --- (B) 相对变换：MuJoCo 实测 ---
+print("\n--- (B) MuJoCo 实测的相对变换 ---")
+
+if wrist_body_id >= 0 and pinch_site_id >= 0:
+    T_w3_tcp_meas = _measure_T_w3_tcp(_data, wrist_body_id, pinch_site_id)
+    meas_pos = T_w3_tcp_meas[:3, 3]
+    meas_rpy = R.from_matrix(T_w3_tcp_meas[:3, :3]).as_euler('xyz', degrees=True)
+    print(f"  T(wrist3→TCP) 实测 pos: {meas_pos}")
+    print(f"  T(wrist3→TCP) 实测 rpy(deg): {meas_rpy}")
+
+if wrist_body_id >= 0 and flange_id >= 0:
+    T_w_w3 = np.eye(4)
+    T_w_w3[:3, :3] = _data.xmat[wrist_body_id].reshape(3, 3)
+    T_w_w3[:3, 3] = _data.xpos[wrist_body_id]
+    T_w_fl = np.eye(4)
+    T_w_fl[:3, :3] = _data.xmat[flange_id].reshape(3, 3)
+    T_w_fl[:3, 3] = _data.xpos[flange_id]
+    T_w3_fl = np.linalg.inv(T_w_w3) @ T_w_fl
+    w3fl_pos = T_w3_fl[:3, 3]
+    w3fl_rpy = R.from_matrix(T_w3_fl[:3, :3]).as_euler('xyz', degrees=True)
+    print(f"  T(wrist3→flange) 实测 pos: {w3fl_pos}")
+    print(f"  T(wrist3→flange) 实测 rpy(deg): {w3fl_rpy}")
+
+
+# --- (C) 配置链路：代码中的变换矩阵 ---
+print("\n--- (C) 代码配置链路的变换矩阵 ---")
+
+print(f"  robot.curobo_tcp_rel_pos: {robot.curobo_tcp_rel_pos}")
+print(f"  robot.curobo_tcp_rel_rot: {robot.curobo_tcp_rel_rot}")
+print(f"  CFG_REL_IS_TCP_TO_EE: {CFG_REL_IS_TCP_TO_EE}")
+print(f"  W3_TO_EE_BRIDGE_POS: {W3_TO_EE_BRIDGE_POS}")
+print(f"  W3_TO_EE_BRIDGE_RPY(deg): {np.degrees(W3_TO_EE_BRIDGE_RPY)}")
+
+T_bridge = _bridge_T_w3_ee()
+bridge_pos = T_bridge[:3, 3]
+bridge_rpy = R.from_matrix(T_bridge[:3, :3]).as_euler('xyz', degrees=True)
+print(f"  T_bridge(w3→ee) pos: {bridge_pos}")
+print(f"  T_bridge(w3→ee) rpy(deg): {bridge_rpy}")
+
+T_ee_tcp = _cfg_T_ee_tcp(robot)
+eetcp_pos = T_ee_tcp[:3, 3]
+eetcp_rpy = R.from_matrix(T_ee_tcp[:3, :3]).as_euler('xyz', degrees=True)
+print(f"  T_cfg(ee→tcp) pos: {eetcp_pos}")
+print(f"  T_cfg(ee→tcp) rpy(deg): {eetcp_rpy}")
+
+T_w3_tcp_pred = _T_w3_tcp_from_cfg(robot)
+pred_pos = T_w3_tcp_pred[:3, 3]
+pred_rpy = R.from_matrix(T_w3_tcp_pred[:3, :3]).as_euler('xyz', degrees=True)
+print(f"  T_pred(w3→tcp) = bridge @ cfg  pos: {pred_pos}")
+print(f"  T_pred(w3→tcp) = bridge @ cfg  rpy(deg): {pred_rpy}")
+
+
+# --- (D) 配置 vs 实测 对比 ---
+print("\n--- (D) 配置 vs 实测 误差 ---")
+if wrist_body_id >= 0 and pinch_site_id >= 0:
+    T_err = np.linalg.inv(T_w3_tcp_pred) @ T_w3_tcp_meas
+    pos_err = np.linalg.norm(T_err[:3, 3]) * 1000  # mm
+    rot_err = np.degrees(np.linalg.norm(R.from_matrix(T_err[:3, :3]).as_rotvec()))
+    print(f"  位置误差: {pos_err:.4f} mm")
+    print(f"  姿态误差: {rot_err:.4f} deg")
+    if pos_err > 1.0 or rot_err > 0.5:
+        print("  ⚠️  误差过大，bridge 常量需要重新标定")
+    else:
+        print("  ✅ 链路一致")
+
+
+# --- (E) IK 坐标系验证 ---
+print("\n--- (E) IK 求解器坐标系验证 ---")
+print(f"  handler 设置的 robot base pos: {robot_dict['ur5e_2f85']['pos'].tolist()}")
+print(f"  handler 设置的 robot base rot: {robot_dict['ur5e_2f85']['rot'].tolist()}")
+if base_body_id >= 0:
+    print(f"  MuJoCo 实际 ur5e_base pos: {base_pos_mj.tolist()}")
+    base_offset = np.linalg.norm(
+        np.array(robot_dict['ur5e_2f85']['pos'].tolist()) - base_pos_mj
+    )
+    print(f"  设置值 vs MuJoCo实际 偏差: {base_offset*1000:.2f} mm")
+
+print(f"  IK solver type: {args.solver}")
+print(f"  ee_body_name: {robot.ee_body_name}")
+print(f"  当前是否做 world→base 变换: 否 (方案A，直接传世界坐标)")
+print(f"  ⚠️  如果 base 不在世界原点，IK 结果会有系统偏差")
+
+
+# --- (F) 第一步轨迹目标验证 ---
+print("\n--- (F) 第一步 (step=0) 轨迹目标 ---")
+_panel_tip_test = get_site_world_pos(_data, panel_tip_site_id)
+_ee_pos_t, _ee_quat_t, _gw = get_trajectory_targets(
+    0, device, robot, REAL_TCP_DOWN_QUAT_WXYZ, _panel_tip_test
+)
+print(f"  TCP 目标 (世界): pos={_ee_pos_t.detach().cpu().numpy().flatten()}")
+print(f"                   quat(wxyz)={_ee_quat_t.detach().cpu().numpy().flatten()}")
+print(f"  注意: 上面是经过 tcp_pose_to_wrist3_pose 转换后的 wrist3 目标")
+print(f"  gripper_width: {_gw}")
+
+print("\n" + "="*70)
+
+
 
 # 修改主循环 - 每步都求解IK，实现真正的笛卡尔空间轨迹跟踪
-for step in range(220):
-    log.debug(f"Step {step}")
+for step in range(450):
     states = handler.get_states()
 
     # ===== 步骤1: 读取 panel4_tip_L 位置并生成轨迹目标 =====
@@ -612,136 +896,70 @@ for step in range(220):
     # 扩展目标到所有环境
     ee_pos_batch_world = ee_pos_target.repeat(args.num_envs, 1)
     ee_quat_batch_world = ee_quat_target.repeat(args.num_envs, 1)
-
-    # ===== 实验：直接使用世界坐标测试 IK 求解器期望的坐标系 =====
-    # 假设：IK 求解器可能期望世界坐标系，而不是 base 坐标系
-    # 测试方法：直接传入世界坐标，看机器人是否能到达正确位置
-    if step == 0:
-        log.warning(f"\n⚠️  实验模式：直接使用世界坐标系目标测试 IK 求解器")
-        log.warning(f"如果机器人能正确到达目标，说明 IK 求解器期望世界坐标")
-        log.warning(f"如果机器人仍然偏移，说明问题在其他地方\n")
     
-    # 方案A：使用世界坐标（实验）
-    ee_pos_base = ee_pos_batch_world[0:1]
-    ee_quat_base = ee_quat_batch_world[0:1]
+    ee_pos_base, ee_quat_base = world_pose_to_base_pose(
+        ee_pos_batch_world[0], 
+        ee_quat_batch_world[0], 
+        robot_base_pos_world[0], 
+        robot_base_quat_world[0]
+    )    
     
-    # 方案B：使用 base 坐标（原方案，注释掉用于对比）
-    # ee_pos_base, ee_quat_base = world_pose_to_base_pose(
-    #     ee_pos_batch_world[0:1],      # 取第一个环境的目标（世界坐标）
-    #     ee_quat_batch_world[0:1],     # 世界坐标系姿态
-    #     robot_base_pos_world,          # base 在世界坐标系中的位置
-    #     robot_base_quat_world          # base 在世界坐标系中的姿态
-    # )
-    
-    # ===== 新增：坐标转换验证（仅在关键步骤打印）=====
-    if step in [0, 50, 90, 170]:
-        log.info(f"\n{'='*60}")
-        log.info(f"坐标转换验证 (Step {step})")
-        log.info(f"{'='*60}")
-        log.info(f"世界坐标系目标: pos={ee_pos_batch_world[0].cpu().numpy()}")
-        log.info(f"base 坐标系目标: pos={ee_pos_base[0].cpu().numpy()}")
-        log.info(f"机器人 base 世界位置: {robot_base_pos_world[0].cpu().numpy()}")
-        log.info(f"转换差值: {(ee_pos_batch_world[0] - robot_base_pos_world[0]).cpu().numpy()}")
-        log.info(f"{'='*60}\n")
-
     # 扩展到所有环境
     ee_pos_base_batch = ee_pos_base.repeat(args.num_envs, 1)
     ee_quat_base_batch = ee_quat_base.repeat(args.num_envs, 1)
 
-    # ===== 新增：四元数格式诊断（仅在关键步骤打印）=====
-    if step in [0, 50, 90, 170]:
-        log.info(f"\n{'='*60}")
-        log.info(f"四元数格式诊断 (Step {step})")
-        log.info(f"{'='*60}")
-        quat_np = ee_quat_base_batch[0].cpu().numpy()
-        log.info(f"ee_quat_base_batch: [{quat_np[0]:.4f}, {quat_np[1]:.4f}, {quat_np[2]:.4f}, {quat_np[3]:.4f}] (应为 w,x,y,z)")
-        log.info(f"四元数范数: {ee_quat_base_batch[0].norm().item():.6f} (应该≈1.0)")
-        
-        # 验证四元数格式：w 分量应该是最大的（对于接近单位旋转）
-        if abs(quat_np[0]) > 0.7:
-            log.info(f"✓ 四元数格式正确：w={quat_np[0]:.4f} 是主分量")
-        elif abs(quat_np[3]) > 0.7 and abs(quat_np[0]) < 0.3:
-            log.error(f"⚠️ 四元数格式可能错误！w={quat_np[0]:.4f} 太小，可能是 [x,y,z,w] 格式")
-        log.info(f"{'='*60}\n")
-
-    # 执行 IK 求解（现在使用 base 坐标系的目标）
+    # ======= 【关键修改 1 / 2】：将其翻译进 IK 宇宙 (URDF) =======
+    curr_q_urdf = curr_q.clone()
+    curr_q_urdf[:, 1] -= np.pi / 2  # shoulder_lift 扣除 90°
+    curr_q_urdf[:, 3] -= np.pi / 2  # wrist_1 扣除 90°
+    # 执行 IK 求解（传入翻译后的初始值）
     q_sol, ik_success = ik_solver.solve_ik_batch(
-        ee_pos_base_batch,      # ✓ base 坐标系位置
-        ee_quat_base_batch,     # ✓ base 坐标系姿态（已经是 [w,x,y,z] 格式）
-        curr_q
+        ee_pos_base_batch,      
+        ee_quat_base_batch,     
+        curr_q_urdf             # <---- 留意这里变更为伪装后的 curr_q_urdf
     )
 
 
-    # 检查求解结果
+    # # 执行 IK 求解（现在使用 base 坐标系的目标）
+    # q_sol, ik_success = ik_solver.solve_ik_batch(
+    #     ee_pos_base_batch,      # ✓ base 坐标系位置
+    #     ee_quat_base_batch,     # ✓ base 坐标系姿态（已经是 [w,x,y,z] 格式）
+    #     curr_q
+    # )
+
+    # # 检查求解结果
+    # if ik_success is not None and ik_success.any():
+    #     target_joint_angles = q_sol.clone()
+    # else:
+    #     target_joint_angles = curr_q.clone()
+
+    # ======= 【关键修改 2 / 2】：将解算结果翻译回 MJCF 宇宙 =======
     if ik_success is not None and ik_success.any():
-        target_joint_angles = q_sol.clone()
-        # ===== 新增：打印第二关节角度 =====
-        joint_2_angle = target_joint_angles[0, 1].item()  # 第二关节（索引1）
-        joint_2_deg = joint_2_angle * 180 / 3.14159  # 转换为角度
-        
-        # 定义安全范围（根据UR机械臂调整）
-        JOINT_2_MIN = -2.0  # 弧度，约 -115度
-        JOINT_2_MAX = 0.5   # 弧度，约 29度
-        
-        # 检查是否超出安全范围
-        if joint_2_angle < JOINT_2_MIN or joint_2_angle > JOINT_2_MAX:
-            log.warning(f"⚠️  Step {step}: 第二关节角度 = {joint_2_angle:.3f} rad ({joint_2_deg:.1f}°) - 超出安全范围!")
-        else:
-            log.info(f"✓ Step {step}: 第二关节角度 = {joint_2_angle:.3f} rad ({joint_2_deg:.1f}°)")
-        # ===== 新增结束 =====
-        # ===== 新增：记录第二关节角度 =====
-        joint_2_angles_record.append({
-            'step': step,
-            'joint_2_rad': target_joint_angles[0, 1].item(),
-            'joint_2_deg': target_joint_angles[0, 1].item() * 180 / 3.14159
-        })
-
+        q_sol_mjcf = q_sol.clone()
+        q_sol_mjcf[:, 1] += np.pi / 2 # 补回真实的物理偏角
+        q_sol_mjcf[:, 3] += np.pi / 2 # 补回真实的物理偏角
+        target_joint_angles = q_sol_mjcf
     else:
-        log.warning(f"✗ Step {step}: IK求解失败，保持当前关节角度")
         target_joint_angles = curr_q.clone()
-    
-    # ===== 步骤3: 在阶段切换点打印调试信息 =====
-    if step in [0, 50, 70, 90, 170, 190]:
-        stage_names = {
-            0: "阶段1开始-接近",
-            50: "阶段2开始-精确定位", 
-            70: "阶段3开始-抓取",
-            90: "阶段4开始-展开",
-            170: "阶段5开始-释放",
-            190: "阶段6开始-撤离"
-        }
-        
-        log.info(f"\n{'='*60}")
-        log.info(f"{stage_names[step]} (Step {step})")
-        log.info(f"{'='*60}")
-        log.info(f"✓ IK求解成功")
-        log.info(f"求解的关节角度: {q_sol[0].cpu().numpy()}")
 
-        # ===== 新增：详细的关节角度分析 =====
-        joint_angles_np = q_sol[0].cpu().numpy()
-        joint_names = ["Base", "Shoulder", "Elbow", "Wrist1", "Wrist2", "Wrist3"]
-        log.info(f"\n关节角度详情:")
-        for i, (name, angle) in enumerate(zip(joint_names, joint_angles_np)):
-            angle_deg = angle * 180 / 3.14159
-            if i == 1:  # 第二关节（Shoulder）
-                status = "⚠️ 危险" if angle < -2.0 or angle > 0.5 else "✓ 安全"
-                log.info(f"  关节{i} ({name}): {angle:.3f} rad ({angle_deg:.1f}°) {status}")
-            else:
-                log.info(f"  关节{i} ({name}): {angle:.3f} rad ({angle_deg:.1f}°)")
-        # ===== 新增结束 =====
-
-        # 打印调试信息
-        _wrist_body_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_BODY, "wrist_3_link")
-        _pinch_site_id = mj.mj_name2id(_model, mj.mjtObj.mjOBJ_SITE, "pinch")
-        _wrist_pos_actual = _data.xpos[_wrist_body_id].copy()
-        _pinch_pos_actual = _data.site_xpos[_pinch_site_id].copy()
+    # ===== 调试打印：第20步和第40步 =====
+    if step in (20, 40, 70):
+        print(f"\n{'='*60}")
+        print(f"[DEBUG] step={step}")
+        print(f"  panel_tip_world_pos : {panel_tip_world_pos}")
+        print(f"  wrist3目标(世界) pos: {ee_pos_target.detach().cpu().numpy().flatten()}")
+        print(f"  wrist3目标(世界) quat:{ee_quat_target.detach().cpu().numpy().flatten()}  (w,x,y,z)")
+        print(f"  wrist3目标(base) pos: {ee_pos_base.detach().cpu().numpy().flatten()}")
+        print(f"  wrist3目标(base) quat:{ee_quat_base.detach().cpu().numpy().flatten()}  (w,x,y,z)")
+        print(f"  curr_q              : {curr_q.detach().cpu().numpy().flatten()}")
+        print(f"  ik_success          : {ik_success}")
+        print(f"  q_sol               : {q_sol.detach().cpu().numpy().flatten() if q_sol is not None else None}")
+        print(f"  target_joint_angles : {target_joint_angles.detach().cpu().numpy().flatten()}")
+        print(f"  gripper_width       : {gripper_width}")
+        print(f"{'='*60}\n")
         
-        log.info(f"目标 wrist3 坐标: x={ee_pos_target[0, 0]:.4f}, y={ee_pos_target[0, 1]:.4f}, z={ee_pos_target[0, 2]:.4f}")
-        log.info(f"实际 wrist3 坐标: x={_wrist_pos_actual[0]:.4f}, y={_wrist_pos_actual[1]:.4f}, z={_wrist_pos_actual[2]:.4f}")
-        log.info(f"实际 TCP(pinch) 坐标: x={_pinch_pos_actual[0]:.4f}, y={_pinch_pos_actual[1]:.4f}, z={_pinch_pos_actual[2]:.4f}")
-        log.info(f"夹爪开度: {gripper_width:.2f}")
-        log.info(f"{'='*60}\n")
-    
+
+
     # ===== 步骤4: 处理夹爪命令 =====
     gripper_command = torch.full((args.num_envs,), gripper_width, device=device)
     gripper_widths = process_gripper_command(gripper_command, robot, device)
@@ -761,30 +979,18 @@ for step in range(220):
 
 obs_saver.save()
 
-# ===== 新增：保存关节角度数据并生成报告 =====
-import pandas as pd
-df_joints = pd.DataFrame(joint_2_angles_record)
-# 使用与视频相同的输出目录，并包含仿真器名称
-output_dir = "get_started/output"
-csv_path = f"{output_dir}/joint_2_angles_log_{args.sim}.csv"
-df_joints.to_csv(csv_path, index=False)
-log.info(f"\n关节角度数据已保存到: {csv_path}")
+# ===== 脚本退出清理：避免 Renderer 报错 =====
+import gc
+# 如果有旧的 context 没有释放，显式释放
+if hasattr(handler, 'close'):
+    handler.close()
 
-# 统计分析
-log.info(f"\n{'='*60}")
-log.info(f"第二关节角度统计分析:")
-log.info(f"{'='*60}")
-log.info(f"最小值: {df_joints['joint_2_rad'].min():.3f} rad ({df_joints['joint_2_deg'].min():.1f}°)")
-log.info(f"最大值: {df_joints['joint_2_rad'].max():.3f} rad ({df_joints['joint_2_deg'].max():.1f}°)")
-log.info(f"平均值: {df_joints['joint_2_rad'].mean():.3f} rad ({df_joints['joint_2_deg'].mean():.1f}°)")
+# 删除各种可能持有 C++ / MuJoCo 对象的引用
+del obs
+del handler
+del obs_saver
+if '_model' in locals(): del _model
+if '_data' in locals(): del _data
 
-# 找出危险步数
-dangerous_steps = df_joints[(df_joints['joint_2_rad'] < -2.0) | (df_joints['joint_2_rad'] > 0.5)]
-if len(dangerous_steps) > 0:
-    log.warning(f"\n⚠️  发现 {len(dangerous_steps)} 个危险步数:")
-    for _, row in dangerous_steps.iterrows():
-        log.warning(f"  Step {int(row['step'])}: {row['joint_2_rad']:.3f} rad ({row['joint_2_deg']:.1f}°)")
-else:
-    log.info(f"\n✓ 所有步数的第二关节角度都在安全范围内")
-log.info(f"{'='*60}\n")
-# ===== 新增结束 =====
+# 强制进行垃圾回收，在 Python 解释器销毁 glfw 等全局模块之前回收 C++ 对象
+gc.collect()

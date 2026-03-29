@@ -1,18 +1,8 @@
 # inline_scene_adapter.py
-"""MuJoCo 场景内联机器人适配器
+"""Adapter for MuJoCo scenes with inline (non-namespaced) robots.
 
-本模块通过猴子补丁机制扩展 MujocoHandler，用于处理直接嵌入场景 XML 文件中的机器人，
-这些机器人不使用 dm_control 的命名空间前缀（例如 "shoulder_pan_joint" 而非 "ur5e/shoulder_pan_joint"）。
-
-核心功能：
-- 递归解析 XML 包含文件
-- 将内联机器人的 body/joint 映射到 MuJoCo 模型元素
-- 处理夹爪腱驱动执行器（如 Robotiq 2F-85）
-- 支持平台特定的渲染（macOS vs Linux）
-
-使用方法：
-    from inline_scene_adapter import install_inline_scene_patches
-    install_inline_scene_patches()  # 在创建 MujocoHandler 之前调用
+Overrides MujocoHandler methods to handle robots embedded directly
+in scene XML without dm_control's namespace prefix.
 """
 
 from __future__ import annotations
@@ -20,7 +10,7 @@ from __future__ import annotations
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Dict, Set
+from typing import Dict, List, Optional, Set
 
 import numpy as np
 import torch
@@ -33,20 +23,13 @@ from metasim.types import CameraState, ObjectState, RobotState, TensorState
 
 
 # ---------------------------------------------------------------------------
-# XML 包含文件解析器
+# XML include resolver
 # ---------------------------------------------------------------------------
 
 def resolve_includes(xml_path: str) -> str:
-    """递归展开 MuJoCo XML 中的所有 <include file="..."/> 标签
-    
-    MuJoCo XML 文件可以通过 <include> 标签引用其他文件。本函数递归展开所有包含文件，
-    并将资源路径重新定位为相对于根 XML 目录的路径。
-    
-    Args:
-        xml_path: 根 MuJoCo XML 文件路径
-        
-    Returns:
-        展开所有包含文件后的完整 XML 字符串
+    """Recursively expand all <include file="..."/> in a MuJoCo XML.
+
+    Rewrites asset paths in included files to be relative to the root XML dir.
     """
     xml_dir = os.path.dirname(os.path.abspath(xml_path))
     tree = ET.parse(xml_path)
@@ -56,27 +39,15 @@ def resolve_includes(xml_path: str) -> str:
 
 
 def _expand(element: ET.Element, base_dir: str, root_dir: str) -> None:
-    """递归展开 include 标签并重新定位资源路径
-    
-    Args:
-        element: 当前正在处理的 XML 元素
-        base_dir: 当前 XML 文件所在目录（用于解析相对路径）
-        root_dir: 根 XML 文件所在目录（用于重新定位资源路径）
-    """
     i = 0
     while i < len(element):
         child = element[i]
         if child.tag == "include":
-            # 解析被包含的文件
             inc_path = os.path.normpath(os.path.join(base_dir, child.get("file")))
             inc_dir = os.path.dirname(inc_path)
             inc_root = ET.parse(inc_path).getroot()
-            
-            # 递归展开并重新定位路径
             _expand(inc_root, inc_dir, root_dir)
             _rebase_paths(inc_root, inc_dir, root_dir)
-            
-            # 用包含的内容替换 <include> 标签
             for j, inc_child in enumerate(list(inc_root)):
                 element.insert(i + j, inc_child)
             element.remove(child)
@@ -86,59 +57,45 @@ def _expand(element: ET.Element, base_dir: str, root_dir: str) -> None:
 
 
 def _rebase_paths(element: ET.Element, src_dir: str, dst_dir: str) -> None:
-    """将资源文件路径重写为相对于目标目录的路径
-    
-    Args:
-        element: XML 元素
-        src_dir: 源文件目录
-        dst_dir: 目标文件目录
-    """
     for el in element.iter():
         fv = el.get("file")
         if fv and el.tag != "include":
-            abs_path = os.path.normpath(os.path.join(src_dir, fv))
-            el.set("file", os.path.relpath(abs_path, dst_dir))
+            el.set("file", os.path.relpath(
+                os.path.normpath(os.path.join(src_dir, fv)), dst_dir
+            ))
 
 
 # ---------------------------------------------------------------------------
-# 内联机器人描述符
+# Inline robot descriptor
 # ---------------------------------------------------------------------------
 
 @dataclass
 class InlineRobotDescriptor:
-    """描述直接嵌入场景 XML 中的机器人（无命名空间）
-    
-    该描述符将机器人组件映射到对应的 MuJoCo 模型元素，不使用命名空间前缀。
-    支持标准关节执行器和腱驱动夹爪执行器。
-    
-    属性说明：
-        root_body: 机器人根 body 在场景中的名称
-        body_names: 属于该机器人的所有 body 名称集合
-        joint_names: 属于该机器人的所有关节名称集合
-        joint_to_actuator: URDF 关节名到场景执行器名的映射字典
-        gripper_joints: 由夹爪执行器控制的关节名称集合
-        gripper_actuator_name: 腱驱动夹爪执行器的名称
-        gripper_driver_joint: 驱动夹爪机构的主关节名称
-        gripper_driver_range: 驱动关节的物理范围（弧度）
-        gripper_actuator_range: 夹爪执行器的控制范围（0-255）
-    """
-    
+    """Describes a robot embedded directly in the scene XML (no namespace)."""
+
     root_body: str
     body_names: Set[str]
     joint_names: Set[str]
+
+    # Actuator name mapping: URDF joint name -> scene XML actuator name
     joint_to_actuator: Dict[str, str] = field(default_factory=dict)
+    # Joint names that map to a single tendon-driven gripper actuator
     gripper_joints: Set[str] = field(default_factory=set)
     gripper_actuator_name: str = "fingers_actuator"
+    # Linear mapping: driver_joint_range -> actuator_ctrl_range
     gripper_driver_joint: str = "right_driver_joint"
     gripper_driver_range: float = 0.8
     gripper_actuator_range: float = 255.0
-    
-    # 兼容 MujocoHandler 的占位字段
+
+    # Stub fields expected by MujocoHandler internals
     model: str = ""
     full_identifier: str = ""
 
 
-# 预构建的 UR5e + Robotiq 2F-85 机器人描述符
+# ---------------------------------------------------------------------------
+# Pre-built UR5e + Robotiq 2F-85 descriptor
+# ---------------------------------------------------------------------------
+
 UR5E_2F85_DESCRIPTOR = InlineRobotDescriptor(
     root_body="ur5e_base",
     body_names={
@@ -176,22 +133,19 @@ UR5E_2F85_DESCRIPTOR = InlineRobotDescriptor(
 
 
 # ---------------------------------------------------------------------------
-# 适配器安装
+# Adapter: apply all patches in one place
 # ---------------------------------------------------------------------------
 
 def _is_inline(stub) -> bool:
-    """检查 stub 是否为内联机器人描述符"""
     return isinstance(stub, InlineRobotDescriptor)
 
 
-def install_inline_scene_patches(descriptor: InlineRobotDescriptor = UR5E_2F85_DESCRIPTOR) -> None:
-    """通过猴子补丁使 MujocoHandler 支持内联机器人场景
-    
-    本函数对 MujocoHandler 的方法应用所有必要的补丁，以处理直接嵌入场景 XML 文件中的机器人。
-    必须在创建 MujocoHandler 实例之前调用。
-    
-    Args:
-        descriptor: 定义 body/joint/actuator 映射关系的机器人描述符
+def install_inline_scene_patches(
+    descriptor: InlineRobotDescriptor = UR5E_2F85_DESCRIPTOR,
+) -> None:
+    """Monkey-patch MujocoHandler to support inline-robot scenes.
+
+    Call once before ``get_handler()``.
     """
     _patch_init_scene()
     _patch_add_robots(descriptor)
@@ -202,12 +156,9 @@ def install_inline_scene_patches(descriptor: InlineRobotDescriptor = UR5E_2F85_D
     _patch_set_dof_targets(descriptor)
 
 
-# ---------------------------------------------------------------------------
-# 各个补丁函数
-# ---------------------------------------------------------------------------
+# -- individual patches (private) ------------------------------------------
 
 def _patch_init_scene() -> None:
-    """补丁：场景初始化，解析 XML 包含文件"""
     orig = MujocoHandler._init_scene
 
     def _init_scene(self):
@@ -224,7 +175,6 @@ def _patch_init_scene() -> None:
 
 
 def _patch_add_robots(desc: InlineRobotDescriptor) -> None:
-    """补丁：添加机器人，使用内联描述符"""
     orig = MujocoHandler._add_robots_to_model
 
     def _add_robots(self, mjcf_model):
@@ -239,31 +189,25 @@ def _patch_add_robots(desc: InlineRobotDescriptor) -> None:
 
 
 def _patch_set_root_state() -> None:
-    """补丁：设置根状态，跳过内联机器人（姿态已在场景 XML 中定义）"""
     orig = MujocoHandler._set_root_state
 
     def _set_root_state(self, obj_name, obj_state, zero_vel=False):
         if self.scenario.scene is not None:
             for robot in self.robots:
                 if robot.name == obj_name:
-                    return  # 姿态已在场景 XML 中定义
+                    return  # pose defined in scene XML
         orig(self, obj_name, obj_state, zero_vel)
 
     MujocoHandler._set_root_state = _set_root_state
 
 
 def _patch_name_lookups() -> None:
-    """补丁：body/关节名称查找，支持内联机器人
-    
-    覆盖 MujocoHandler 方法，为内联机器人返回裸名称（无命名空间前缀），
-    同时保留命名空间机器人的原始行为。
-    """
+    """Patch _get_body_names, _get_body_ids_reindex, _get_joint_names."""
     _orig_body_names = MujocoHandler._get_body_names
     _orig_body_ids = MujocoHandler._get_body_ids_reindex
     _orig_joint_names = MujocoHandler._get_joint_names
 
     def _get_body_names(self, obj_name, sort=True):
-        """获取 body 名称列表，排除根 body"""
         stub = self.mj_objects.get(obj_name)
         if _is_inline(stub):
             names = [n for n in stub.body_names if n != stub.root_body]
@@ -271,12 +215,9 @@ def _patch_name_lookups() -> None:
         return _orig_body_names(self, obj_name, sort)
 
     def _get_body_ids_reindex(self, obj_name):
-        """获取重新索引的 body ID 列表，使用缓存提升性能"""
         stub = self.mj_objects.get(obj_name)
         if not _is_inline(stub):
             return _orig_body_ids(self, obj_name)
-        
-        # 缓存 body ID 以避免重复查找
         cache = getattr(self, "_body_ids_reindex_cache", {})
         if obj_name not in cache:
             ids = [
@@ -289,7 +230,6 @@ def _patch_name_lookups() -> None:
         return cache[obj_name]
 
     def _get_joint_names(self, obj_name, sort=True):
-        """从描述符获取关节名称列表"""
         stub = self.mj_objects.get(obj_name)
         if _is_inline(stub):
             names = [
@@ -306,36 +246,28 @@ def _patch_name_lookups() -> None:
 
 
 def _patch_actuator_lookups() -> None:
-    """补丁：执行器名称和状态查找，支持内联机器人
-    
-    处理关节驱动执行器（trntype=0）和腱驱动执行器（trntype=1，如 Robotiq 夹爪手指）。
-    """
     _orig_names = MujocoHandler._get_actuator_names
     _orig_states = MujocoHandler._get_actuator_states
 
     def _get_actuator_names(self, robot_name):
-        """获取内联机器人的执行器名称列表"""
         stub = self.mj_objects.get(robot_name)
         if not _is_inline(stub):
             return _orig_names(self, robot_name)
-        
         result = []
         for i in range(self.physics.model.nu):
             trntype = self.physics.model.actuator_trntype[i]
-            if trntype == 0:  # 关节驱动执行器
+            if trntype == 0:  # joint-driven
                 jid = self.physics.model.actuator_trnid[i][0]
                 if self.physics.model.joint(jid).name in stub.joint_names:
                     result.append(self.physics.model.actuator(i).name)
-            elif trntype == 1:  # 腱驱动执行器（夹爪）
+            elif trntype == 1:  # tendon-driven (e.g. Robotiq fingers)
                 result.append(self.physics.model.actuator(i).name)
         return result
 
     def _get_actuator_states(self, obj_name):
-        """获取当前执行器状态（位置、速度、力矩）"""
         stub = self.mj_objects.get(obj_name)
         if not _is_inline(stub):
             return _orig_states(self, obj_name)
-        
         names = set(self._get_actuator_names(obj_name))
         states = {"dof_pos_target": {}, "dof_vel_target": {}, "dof_torque": {}}
         for i in range(self.physics.model.nu):
@@ -351,18 +283,14 @@ def _patch_actuator_lookups() -> None:
 
 
 def _patch_get_states() -> None:
-    """补丁：状态获取，支持内联机器人
-    
-    收集物体、机器人和相机的状态。同时处理内联和命名空间机器人，
-    返回统一的 TensorState 结构。
-    """
+    """Patch _get_states for inline robots (bare joint/body names)."""
     orig = MujocoHandler._get_states
 
     def _get_states(self, env_ids=None):
         if self.scenario.scene is None:
             return orig(self, env_ids=env_ids)
 
-        # 收集物体状态（关节物体和刚体）
+        # Objects
         object_states = {}
         for obj in self.objects:
             stub = self.mj_objects[obj.name]
@@ -387,7 +315,7 @@ def _patch_get_states() -> None:
                 state = ObjectState(root_state=torch.from_numpy(root_np).float().unsqueeze(0))
             object_states[obj.name] = state
 
-        # 获取机器人状态
+        # Robots
         robot_states = {}
         for robot in self.robots:
             stub = self.mj_objects[robot.name]
@@ -402,17 +330,20 @@ def _patch_get_states() -> None:
             bids = self._get_body_ids_reindex(robot.name)
             root_np, body_np = self._pack_state([bid] + bids)
 
-            def _joint_value(jn, attr):
-                """获取关节属性值（qpos 或 qvel）"""
+            def _jq(jn):
                 key = jn if inline else f"{stub.model}/{jn}"
-                return getattr(self.physics.data.joint(key), attr).item()
+                return self.physics.data.joint(key).qpos.item()
+
+            def _jv(jn):
+                key = jn if inline else f"{stub.model}/{jn}"
+                return self.physics.data.joint(key).qvel.item()
 
             robot_states[robot.name] = RobotState(
                 body_names=self._get_body_names(robot.name),
                 root_state=torch.from_numpy(root_np).float().unsqueeze(0),
                 body_state=torch.from_numpy(body_np).float().unsqueeze(0),
-                joint_pos=torch.tensor([_joint_value(j, "qpos") for j in jnames]).unsqueeze(0),
-                joint_vel=torch.tensor([_joint_value(j, "qvel") for j in jnames]).unsqueeze(0),
+                joint_pos=torch.tensor([_jq(j) for j in jnames]).unsqueeze(0),
+                joint_vel=torch.tensor([_jv(j) for j in jnames]).unsqueeze(0),
                 joint_pos_target=torch.from_numpy(self.physics.data.ctrl[act_idx].copy()).unsqueeze(0),
                 joint_vel_target=(
                     torch.from_numpy(self._current_vel_target).unsqueeze(0)
@@ -423,7 +354,7 @@ def _patch_get_states() -> None:
                 ).unsqueeze(0),
             )
 
-        # 渲染相机
+        # Cameras — delegate to a helper to avoid duplicating render logic
         camera_states = _render_cameras(self)
 
         return TensorState(
@@ -437,14 +368,7 @@ def _patch_get_states() -> None:
 
 
 def _render_cameras(handler) -> dict:
-    """渲染所有相机，根据平台选择不同的渲染方式
-    
-    Args:
-        handler: MujocoHandler 实例
-        
-    Returns:
-        相机状态字典 {camera_name: CameraState}
-    """
+    """Render all cameras. Extracted to keep _get_states focused."""
     import sys as _sys
 
     camera_states = {}
@@ -459,24 +383,30 @@ def _render_cameras(handler) -> dict:
         rgb = depth = None
 
         if "rgb" in camera.data_types:
-            rgb = (_render_rgb_macos(handler, camera, camera_id) if _sys.platform == "darwin"
-                   else _render_rgb_default(handler, camera, camera_id))
+            if _sys.platform == "darwin":
+                rgb = _render_rgb_macos(handler, camera, camera_id)
+            else:
+                rgb_np = handler.physics.render(
+                    width=camera.width, height=camera.height,
+                    camera_id=camera_id, depth=False,
+                )
+                rgb = torch.from_numpy(np.ascontiguousarray(rgb_np)).unsqueeze(0)
 
         if "depth" in camera.data_types:
-            depth = (_render_depth_macos(handler, camera, camera_id) if _sys.platform == "darwin"
-                     else _render_depth_default(handler, camera, camera_id))
+            if _sys.platform == "darwin":
+                depth = _render_depth_macos(handler, camera, camera_id)
+            else:
+                depth_np = handler.physics.render(
+                    width=camera.width, height=camera.height,
+                    camera_id=camera_id, depth=True,
+                )
+                depth = torch.from_numpy(np.ascontiguousarray(depth_np)).unsqueeze(0)
 
         camera_states[camera.name] = CameraState(rgb=rgb, depth=depth)
     return camera_states
 
 
 def _ensure_renderer(handler, camera):
-    """确保渲染器存在且尺寸正确
-    
-    Args:
-        handler: MujocoHandler 实例
-        camera: 相机配置对象
-    """
     import mujoco as _mj
     if handler.renderer is None or (handler.renderer.width, handler.renderer.height) != (
         camera.width, camera.height,
@@ -485,7 +415,6 @@ def _ensure_renderer(handler, camera):
 
 
 def _render_rgb_macos(handler, camera, camera_id):
-    """在 macOS 上使用原生 mujoco 渲染器渲染 RGB 图像"""
     with handler._mj_lock:
         _ensure_renderer(handler, camera)
         handler._mirror_state_to_native()
@@ -493,17 +422,7 @@ def _render_rgb_macos(handler, camera, camera_id):
         return torch.from_numpy(handler.renderer.render().copy()).unsqueeze(0)
 
 
-def _render_rgb_default(handler, camera, camera_id):
-    """使用 dm_control physics 渲染 RGB 图像"""
-    rgb_np = handler.physics.render(
-        width=camera.width, height=camera.height,
-        camera_id=camera_id, depth=False,
-    )
-    return torch.from_numpy(np.ascontiguousarray(rgb_np)).unsqueeze(0)
-
-
 def _render_depth_macos(handler, camera, camera_id):
-    """在 macOS 上使用原生 mujoco 渲染器渲染深度图"""
     with handler._mj_lock:
         _ensure_renderer(handler, camera)
         handler._mirror_state_to_native()
@@ -516,68 +435,62 @@ def _render_depth_macos(handler, camera, camera_id):
         return torch.from_numpy(depth_np.copy()).unsqueeze(0)
 
 
-def _render_depth_default(handler, camera, camera_id):
-    """使用 dm_control physics 渲染深度图"""
-    depth_np = handler.physics.render(
-        width=camera.width, height=camera.height,
-        camera_id=camera_id, depth=True,
-    )
-    return torch.from_numpy(np.ascontiguousarray(depth_np)).unsqueeze(0)
-
-
 def _patch_set_dof_targets(desc: InlineRobotDescriptor) -> None:
-    """补丁：DOF 目标设置，将关节名映射到执行器名"""
     orig = MujocoHandler.set_dof_targets
 
+    def _remap_action(env_action: dict) -> dict:
+        remapped = {}
+        for robot_name, payload in env_action.items():
+            new_payload = {}
+            for key, val in payload.items():
+                if key == "dof_pos_target":
+                    new_payload[key] = _remap_pos_targets(val, desc)
+                elif key == "dof_vel_target" and val is not None:
+                    new_payload[key] = {
+                        desc.joint_to_actuator.get(jn, jn): jv
+                        for jn, jv in val.items()
+                        if jn not in desc.gripper_joints
+                    }
+                else:
+                    new_payload[key] = val
+            remapped[robot_name] = new_payload
+        return remapped
+
+
     def _set_dof_targets(self, actions):
-        """设置机器人关节目标位置"""
         if self.scenario.scene is None:
             return orig(self, actions)
         
-        # 处理 list/dict 格式（兼容不同输入格式）
+        # 处理 list/dict 格式
         if isinstance(actions, list):
             actions = actions[0]
         
         self._actions_cache = actions
         
-        # 遍历每个机器人的动作指令
         for robot_name, payload in actions.items():
             targets = payload["dof_pos_target"]
-            # 将关节名映射为执行器名，并处理夹爪特殊逻辑
             remapped = _remap_pos_targets(targets, desc)
             
-            # 将控制值写入 MuJoCo 执行器
             for actuator_name, value in remapped.items():
                 aid = self.physics.model.actuator(actuator_name).id
                 self.physics.data.ctrl[aid] = value
+
+
 
     MujocoHandler.set_dof_targets = _set_dof_targets
 
 
 def _remap_pos_targets(targets: dict, desc: InlineRobotDescriptor) -> dict:
-    """将关节位置目标重映射为执行器控制值
-    
-    Args:
-        targets: 关节位置目标字典 {joint_name: position}
-        desc: 内联机器人描述符
-        
-    Returns:
-        执行器控制值字典 {actuator_name: control_value}
-    """
     new = {}
     gripper_val = None
-    
-    # 遍历所有关节目标值
     for jn, jv in targets.items():
-        if jn in desc.joint_to_actuator:  # 标准关节：直接映射到执行器
+        if jn in desc.joint_to_actuator:
             new[desc.joint_to_actuator[jn]] = jv
-        elif jn in desc.gripper_joints:  # 夹爪关节：提取驱动关节值
+        elif jn in desc.gripper_joints:
             if gripper_val is None and jn == desc.gripper_driver_joint:
                 gripper_val = jv
-        else:  # 未知关节：直接传递
+        else:
             new[jn] = jv
-    
-    # 将夹爪驱动关节值转换为执行器控制值（线性映射）
     scale = desc.gripper_actuator_range / desc.gripper_driver_range
     new[desc.gripper_actuator_name] = (gripper_val or 0.0) * scale
     return new

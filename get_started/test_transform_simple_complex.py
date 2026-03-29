@@ -15,6 +15,61 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from inline_scene_adapter import install_inline_scene_patches
+from roboverse_pack.robots.ur5e_2f85_cfg import Ur5E2F85Cfg
+
+
+CFG_REL_IS_TCP_TO_EE = True
+W3_TO_EE_BRIDGE_POS = np.array([0.1, 0.1, 0.0], dtype=np.float64)
+W3_TO_EE_BRIDGE_RPY = np.array([np.pi / 2.0, -np.pi / 2.0, 0.0], dtype=np.float64)
+
+
+def T_from_pos_quat_xyzw(pos3, quat_xyzw):
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = R.from_quat(np.asarray(quat_xyzw, dtype=np.float64)).as_matrix()
+    T[:3, 3] = np.asarray(pos3, dtype=np.float64).reshape(3)
+    return T
+
+
+def T_from_pos_rpy_xyz(pos3, rpy_xyz):
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = R.from_euler("xyz", np.asarray(rpy_xyz, dtype=np.float64)).as_matrix()
+    T[:3, 3] = np.asarray(pos3, dtype=np.float64).reshape(3)
+    return T
+
+
+def cfg_T_ee_tcp(robot_cfg):
+    T_cfg = T_from_pos_rpy_xyz(robot_cfg.curobo_tcp_rel_pos, robot_cfg.curobo_tcp_rel_rot)
+    return np.linalg.inv(T_cfg) if CFG_REL_IS_TCP_TO_EE else T_cfg
+
+
+def bridge_T_w3_ee():
+    return T_from_pos_rpy_xyz(W3_TO_EE_BRIDGE_POS, W3_TO_EE_BRIDGE_RPY)
+
+
+def pred_T_w3_tcp(robot_cfg):
+    return bridge_T_w3_ee() @ cfg_T_ee_tcp(robot_cfg)
+
+
+def quat_distance_deg(q1_xyzw, q2_xyzw):
+    # 以最短弧角度比较姿态误差，自动处理 q/-q 等价
+    dot = abs(float(np.dot(q1_xyzw, q2_xyzw)))
+    dot = min(1.0, max(-1.0, dot))
+    return np.degrees(2.0 * np.arccos(dot))
+
+
+def set_ur5e_arm_qpos_by_name(robot, q6):
+    arm_joint_names = [
+        "shoulder_pan_joint",
+        "shoulder_lift_joint",
+        "elbow_joint",
+        "wrist_1_joint",
+        "wrist_2_joint",
+        "wrist_3_joint",
+    ]
+    for jname, q in zip(arm_joint_names, q6):
+        jid = robot.model.joint(jname).id
+        adr = robot.model.jnt_qposadr[jid]
+        robot.data.qpos[adr] = float(q)
 
 
 def get_current_poses(robot):
@@ -88,14 +143,14 @@ def tcp_to_wrist3(tcp_pos, tcp_quat, offset_pos, offset_quat):
     return wrist3_pos, wrist3_quat
 
 
-def test_scenario(robot, offset_pos, offset_quat, qpos, scenario_name):
+def test_scenario(robot, robot_cfg, offset_pos, offset_quat, q6, scenario_name):
     """测试单个场景"""
     print(f"\n{'='*60}")
     print(f"测试场景: {scenario_name}")
     print(f"{'='*60}")
     
-    # 设置关节角度
-    robot.data.qpos[:len(qpos)] = qpos
+    # 按关节名设置 UR5e 6个手臂关节，避免 qpos 前缀写入导致测试姿态不变化
+    set_ur5e_arm_qpos_by_name(robot, q6)
     mujoco.mj_forward(robot.model, robot.data)
     
     # 获取实际位姿
@@ -130,7 +185,22 @@ def test_scenario(robot, offset_pos, offset_quat, qpos, scenario_name):
     print(f"  wrist3->TCP 姿态误差: {quat_error_forward:.6f}")
     print(f"  TCP->wrist3 姿态误差: {quat_error_backward:.6f}")
     
-    success = pos_error_forward < 1e-6 and pos_error_backward < 1e-6
+    # 新增：配置链预测 vs 实测链对齐误差
+    T_w3_tcp_meas = T_from_pos_quat_xyzw(offset_pos, offset_quat)
+    T_w3_tcp_pred = pred_T_w3_tcp(robot_cfg)
+    T_err = np.linalg.inv(T_w3_tcp_pred) @ T_w3_tcp_meas
+    cfg_pos_err_mm = np.linalg.norm(T_err[:3, 3]) * 1000.0
+    cfg_rot_err_deg = np.degrees(np.linalg.norm(R.from_matrix(T_err[:3, :3]).as_rotvec()))
+
+    print(f"  [cfg对齐] 位置误差: {cfg_pos_err_mm:.6f} mm")
+    print(f"  [cfg对齐] 姿态误差: {cfg_rot_err_deg:.6f} deg")
+
+    success = (
+        pos_error_forward < 1e-6
+        and pos_error_backward < 1e-6
+        and cfg_pos_err_mm < 1.0
+        and cfg_rot_err_deg < 0.5
+    )
     print(f"\n结果: {'✓ 通过' if success else '✗ 失败'}")
     
     return success
@@ -149,6 +219,7 @@ def main():
             self.data = data
     
     robot = Robot(model, data)
+    robot_cfg = Ur5E2F85Cfg()
     mujoco.mj_forward(model, data)
     
     print("="*60)
@@ -164,30 +235,36 @@ def main():
     test_cases = [
         {
             "name": "场景1: 初始姿态",
-            "qpos": np.array([0, -np.pi/2, np.pi/2, -np.pi/2, -np.pi/2, 0, 0, 0])
+            "q6": np.array([0, -np.pi/2, np.pi/2, -np.pi/2, -np.pi/2, 0])
         },
         {
             "name": "场景2: 改变第1个关节 (+45度)",
-            "qpos": np.array([np.pi/4, -np.pi/2, np.pi/2, -np.pi/2, -np.pi/2, 0, 0, 0])
+            "q6": np.array([np.pi/4, -np.pi/2, np.pi/2, -np.pi/2, -np.pi/2, 0])
         },
         {
             "name": "场景3: 改变第2个关节 (+30度)",
-            "qpos": np.array([0, -np.pi/2 + np.pi/6, np.pi/2, -np.pi/2, -np.pi/2, 0, 0, 0])
+            "q6": np.array([0, -np.pi/2 + np.pi/6, np.pi/2, -np.pi/2, -np.pi/2, 0])
         },
         {
             "name": "场景4: 改变多个关节",
-            "qpos": np.array([np.pi/6, -np.pi/3, np.pi/3, -np.pi/4, -np.pi/2, np.pi/6, 0, 0])
+            "q6": np.array([np.pi/6, -np.pi/3, np.pi/3, -np.pi/4, -np.pi/2, np.pi/6])
         },
         {
             "name": "场景5: 随机姿态",
-            "qpos": np.concatenate([np.random.uniform(-np.pi, np.pi, 6), [0, 0]])
+            "q6": np.random.uniform(-np.pi, np.pi, 6)
         }
     ]
     
     results = []
     for test_case in test_cases:
-        success = test_scenario(robot, offset_pos, offset_quat, 
-                               test_case["qpos"], test_case["name"])
+        success = test_scenario(
+            robot,
+            robot_cfg,
+            offset_pos,
+            offset_quat,
+            test_case["q6"],
+            test_case["name"],
+        )
         results.append(success)
     
     # 总结
