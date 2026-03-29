@@ -1,0 +1,44 @@
+# 激活conda环境
+conda activate roboverse
+cd RoboVerse
+
+# 资产路径
+/home/e0/RoboVerse/asset_baituan 
+
+# Tutorial 4: Motion Planning For Baituan
+python get_started/4_motion_planning_baituan.py  --sim mujoco --headless
+
+# 设置代理，网络不通的情况
+export https_proxy=socks5://127.0.0.1:7897
+export http_proxy=socks5://127.0.0.1:7897
+export all_proxy=socks5://127.0.0.1:7897
+
+python get_started/4_motion_planning_baituan.py --sim mujoco --headless
+
+# 注意
+注意：这样改会破坏原来 Robotiq 2F-85 的 tendon 联动机制（原来一个 actuator 通过 tendon 同时驱动左右 driver joint）。
+如果后续需要保留联动行为，需要在上层控制逻辑中同步发送相同的指令给 right_driver_joint 和 left_driver_joint。但对于当前让脚本跑通来说，这是最直接的方案
+
+#机械臂ur5e的资产
+/home/e0/RoboVerse/roboverse_data/robots/robotiq_2f85
+/home/e0/RoboVerse/roboverse_data/robots/universal_robots_ur5e
+
+
+# Tutorial 4: Motion Planning For Baituan
+python get_started/4_motion_planning_baituan_jingjian.py  --sim mujoco --headless
+
+#精简版
+/home/e0/RoboVerse/get_started/inline_scene_adapter.py,分装逻辑
+
+#查看现有场景
+# 交互式窗口查看（默认，可鼠标旋转/缩放）
+python get_started/visualize_scene_y.py
+
+# 无头模式，仅保存截图到 get_started/output/scene_y_preview.png
+python get_started/visualize_scene_y.py --headless True
+
+# 自定义相机视角（比如拉近看卫星）
+python get_started/visualize_scene_y.py --cam-pos 2.0 -2.0 2.0 --cam-look-at 0.0 0.0 0.5
+
+# 自定义截图保存路径
+python get_started/visualize_scene_y.py --save-path get_started/output/my_view.png

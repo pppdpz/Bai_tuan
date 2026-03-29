@@ -1,0 +1,86 @@
+Tutorial 0: Static Scene
+# For mac users, replace python with mjpython.
+python get_started/0_static_scene.py  --sim mujoco --headless
+
+Tutorial 1: Control Robot
+# For mac users, replace python with mjpython.
+python get_started/1_control_robot.py  --sim mujoco --headless
+
+Tutorial 2: Add New Robot
+# For mac users, replace python with mjpython.
+python get_started/2_add_new_robot.py  --sim mujoco --headless
+
+Tutorial 3: Parallel Environments
+# For mac users, replace python with mjpython
+python get_started/3_parallel_envs.py  --sim mujoco --num_envs 4 --headless
+
+Tutorial 4: Motion Planning
+# For mac users, replace python with mjpython.
+python get_started/4_motion_planning.py  --sim mujoco --headless
+
+Tutorial 5: Hybrid Simulation
+# IsaacSim + Mujoco
+python get_started/5_hybrid_sim.py  --sim mujoco --renderer isaacsim
+
+Tutorial 6: Advanced Rendering
+Ray Tracing:
+python get_started/6_advanced_rendering.py  --render.mode=raytracing
+
+Path Tracing:
+python get_started/6_advanced_rendering.py  --render.mode=pathtracing
+
+Tutorial 7: Collect Demonstrations
+# Saving Path： roboverse_demo/demo_isaacsim/close_box-test/robot-franka/success/demo_0099
+./roboverse_learn/il/collect_demo.sh
+
+Tutorial 8: Replay Demonstrations
+# Physics replay
+python scripts/advanced/replay_demo.py --sim=isaacsim --task=close_box --num_envs 4
+
+# States replay
+python scripts/advanced/replay_demo.py --sim=isaacsim --task=close_box --num_envs 4 --object-states
+
+Tutorial 9: Config-Based Task Creation
+# Running the Tutorial: IsaacSim
+python get_started/9_cfg_task.py --sim isaacsim --num_envs 4 --task close_box
+
+Tutorial 10: Mount Camera
+# Saving Path：/RoboVerse/get_started/output/10_mount_camera_mujoco.mp4
+python get_started/10_mount_camera.py --sim mujoco --headless
+
+Tutorial 12: Domain Randomization
+# Saving Patch：get_started/output/12_dr_mode1_usd_table_level2.mp4
+python get_started/12_domain_randomization.py \
+    --scene_mode 1 \
+    --level 2 \
+    --seed 42 \
+    --randomize_interval 60
+
+Tutorial 13: Teleoperation
+python scripts/advanced/teleop_keyboard.py --task close_box --robot franka --sim mujoco
+
+Tutorial 14: Real-World Assets
+# Mujoco
+MUJOCO_GL=egl python get_started/14_real_assets.py  --sim mujoco --headless
+# IsaacSim
+python get_started/14_real_assets.py  --sim isaacsim --headless
+
+Tutorial 15: Gaussian Splatting Backgrounds
+# Mujoco
+MUJOCO_GL=egl python3 get_started/15_gs_background.py --sim mujoco --headless
+# IsaacSim
+python3 get_started/15_gs_background.py --sim isaacsim --headless
+
+Tutorial 16: EmbodiedGen Layout Scenes
+# Mujoco
+MUJOCO_GL=egl python get_started/16_embodiedgen_layout.py  --sim mujoco --headless
+# IsaacSim
+python get_started/16_embodiedgen_layout.py  --sim isaacsim --headless
+
+Tutorial 17: Rerun Visualization
+# Step 1: Replay an Existing Task Demo
+python get_started/rerun/replay_task_demo.py --task stack_cube --sim mujoco --output stack_cube.rrd
+# Step 2: View the Recording
+rerun stack_cube.rrd
+# Step 3: Live Viewer During Recording
+python get_started/rerun/replay_task_demo.py --task stack_cube --sim mujoco --output stack_cube.rrd --spawn-viewer

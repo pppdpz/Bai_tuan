@@ -1,0 +1,270 @@
+<!-- solar_array_fragment.xml (MUST be wrapped by <mujocoinclude>) -->
+<mujocoinclude>
+
+  <asset>
+    <!-- <texture name="tex_solar_real" type="2d" file="satellite/solar_cells_tile.png"/> -->
+    <texture name="tex_solar_real" type="2d" file="solar_cells_tile.png"/>
+    <!-- <texture name="tex_solar_real" type="2d" file="../satellite/solar_cells_tile.png"/> -->
+
+
+    <material name="mat_solar_real" texture="tex_solar_real" texuniform="true"
+              texrepeat="4 4"
+              rgba="1 1 1 1" specular="0.30" shininess="0.60" reflectance="0.10"/>
+
+    <texture name="tex_mli" type="2d" builtin="checker"
+             width="512" height="512"
+             rgb1="0.92 0.72 0.12" rgb2="0.65 0.45 0.08"/>
+    <material name="mat_mli" texture="tex_mli" texuniform="true"
+              texrepeat="6 6"
+              rgba="1 1 1 1" specular="0.60" shininess="0.80" reflectance="0.22"/>
+
+    <material name="mat_body"     rgba="0.72 0.74 0.78 1" specular="0.25" shininess="0.35" reflectance="0.08"/>
+    <material name="mat_frame"    rgba="0.12 0.12 0.12 1" specular="0.10" shininess="0.20" reflectance="0.03"/>
+    <material name="mat_radiator" rgba="0.86 0.86 0.90 1" specular="0.08" shininess="0.15" reflectance="0.02"/>
+    <material name="mat_sensor"   rgba="0.10 0.12 0.18 1" specular="0.55" shininess="0.90" reflectance="0.10"/>
+  </asset>
+
+  <default>
+    <geom type="box" density="350" friction="10 10 10"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+
+    <joint damping="1.2" armature="0.01" limited="true"
+           solreflimit="0.01 1" solimplimit="0.95 0.99 0.001"/>
+
+    <default class="sat_visual">
+      <geom contype="0" conaffinity="0" density="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <!-- <body name="satellite_root" pos="0.6 0.8 1.0" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="0.6 0.8 1.0" euler="0 0 1.570796" > -->
+    <!-- <body name="satellite_root" pos="1.0 1.8 1.5" euler="0 0 1.570796" > -->
+    <!-- <body name="satellite_root" pos="0.5 0.6 1.2" euler="0 0 1.570796" > -->
+    <!-- <body name="satellite_root" pos="0.5 0.6 1.2" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="1.5 0.6 1.2" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="1.5 0.6 1.2" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="0.15 0.6 1.1" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="0.55 0.6 1.1" euler="0 0 1.570796" gravcomp="1"> -->
+    <!-- <body name="satellite_root" pos="0.55 0.6 1.5" euler="0 0 1.570796" gravcomp="1"> -->
+    <body name="satellite_root" pos="0.31 0.6 1.0" euler="0 0 1.570796" gravcomp="1">
+    <!-- <body name="satellite_root" pos="1.31 0.6 1.0" euler="0 0 1.570796" gravcomp="1"> -->
+      <body name="satellite_base" pos="0 0 0">
+
+        <geom name="base_geom" type="box" size="0.08 0.08 0.08" material="mat_body" rgba="1 1 1 1"/>
+        <geom class="sat_visual" name="base_mli_wrap" type="box"
+              size="0.082 0.082 0.082" material="mat_mli" rgba="1 1 1 0.95"/>
+        <geom class="sat_visual" name="top_deck" type="box"
+              pos="0 0 0.086" size="0.055 0.055 0.008" material="mat_body" rgba="1 1 1 0.95"/>
+
+        <geom class="sat_visual" name="star_tracker_body" type="cylinder"
+              pos="0.030 0.052 0.095" size="0.012 0.018" material="mat_sensor"/>
+        <geom class="sat_visual" name="star_tracker_lens" type="sphere"
+              pos="0.030 0.052 0.115" size="0.010" material="mat_sensor" rgba="0.03 0.06 0.10 1"/>
+
+        <geom class="sat_visual" name="antenna_1" type="cylinder"
+              pos="-0.050 0.060 0.065" size="0.004 0.060" material="mat_frame"/>
+        <geom class="sat_visual" name="antenna_2" type="cylinder"
+              pos="-0.050 -0.060 0.065" size="0.004 0.060" material="mat_frame"/>
+
+        <geom class="sat_visual" name="radiator_y_pos" type="box"
+              pos="0 0.083 0.000" size="0.070 0.004 0.070" material="mat_radiator"/>
+        <geom class="sat_visual" name="radiator_y_neg" type="box"
+              pos="0 -0.083 0.000" size="0.070 0.004 0.070" material="mat_radiator"/>
+
+        <!-- ===========================
+             右侧展开机构
+             =========================== -->
+        <body name="conn_frame" pos="0.08 0 0" gravcomp="1">
+        <!-- <body name="conn_frame" pos="0.08 0 0" > -->
+          <joint name="hinge_root" type="hinge" pos="0 0 0" axis="0 1 0" range="-0.6 0.6" ref="0"/>
+
+          <geom name="conn_geom" type="box" pos="0.05 0 0" size="0.05 0.015 0.01" material="mat_frame" rgba="1 1 1 1"/>
+
+          <geom class="sat_visual" name="root_hinge_housing" type="cylinder"
+                pos="0.006 0 0" euler="0 1.570796 0" size="0.016 0.020" material="mat_frame"/>
+
+          <body name="panel1" pos="0.10 0 0" gravcomp="1">
+          <!-- <body name="panel1" pos="0.10 0 0" > -->
+            <joint name="hinge_1" type="hinge" pos="0 0 0" axis="0 1 0" range="-1.570796 0" ref="0"/>
+
+            <!-- z stagger: +0.006 -> +0.005 -->
+            <geom name="panel1_geom" type="box" pos="0.09 0  0.005" size="0.09 0.05 0.004"
+                  material="mat_solar_real" rgba="1 1 1 1"/>
+
+            <geom class="sat_visual" name="panel1_skin_top" type="box"
+                  pos="0.09 0 0.0098" size="0.089 0.049 0.0002"
+                  material="mat_solar_real" rgba="1 1 1 1"/>
+            <geom class="sat_visual" name="panel1_skin_bottom" type="box"
+                  pos="0.09 0 0.0012" size="0.089 0.049 0.0002"
+                  material="mat_solar_real" rgba="1 1 1 1"
+                  euler="0 3.141593 0"/>
+
+            <body name="panel2" pos="0.18 0 0" gravcomp="1">
+            <!-- <body name="panel2" pos="0.18 0 0" > -->
+              <joint name="hinge_2" type="hinge" pos="0 0 0" axis="0 1 0" range="0 3.141593" ref="0"/>
+
+              <!-- z stagger: -0.006 -> -0.005 -->
+              <geom name="panel2_geom" type="box" pos="0.09 0 -0.005" size="0.09 0.05 0.004"
+                    material="mat_solar_real" rgba="1 1 1 1"/>
+
+              <geom class="sat_visual" name="panel2_skin_top" type="box"
+                    pos="0.09 0 -0.0012" size="0.089 0.049 0.0002"
+                    material="mat_solar_real" rgba="1 1 1 1"/>
+              <geom class="sat_visual" name="panel2_skin_bottom" type="box"
+                    pos="0.09 0 -0.0088" size="0.089 0.049 0.0002"
+                    material="mat_solar_real" rgba="1 1 1 1"
+                    euler="0 3.141593 0"/>
+
+              <body name="panel3" pos="0.18 0 0" gravcomp="1">
+              <!-- <body name="panel3" pos="0.18 0 0" > -->
+                <joint name="hinge_3" type="hinge" pos="0 0 0" axis="0 1 0" range="-3.141593 0" ref="0"/>
+
+                <!-- z stagger: +0.006 -> +0.005 -->
+                <geom name="panel3_geom" type="box" pos="0.09 0  0.005" size="0.09 0.05 0.004"
+                      material="mat_solar_real" rgba="1 1 1 1"/>
+
+                <geom class="sat_visual" name="panel3_skin_top" type="box"
+                      pos="0.09 0 0.0098" size="0.089 0.049 0.0002"
+                      material="mat_solar_real" rgba="1 1 1 1"/>
+                <geom class="sat_visual" name="panel3_skin_bottom" type="box"
+                      pos="0.09 0 0.0012" size="0.089 0.049 0.0002"
+                      material="mat_solar_real" rgba="1 1 1 1"
+                      euler="0 3.141593 0"/>
+
+                <body name="panel4" pos="0.18 0 0" gravcomp="1">
+                <!-- <body name="panel4" pos="0.18 0 0" > -->
+                  <joint name="hinge_4" type="hinge" pos="0 0 0" axis="0 1 0" range="0 1.570796" ref="0"/>
+
+                  <!-- z stagger: -0.006 -> -0.005 -->
+                  <geom name="panel4_geom" type="box" pos="0.09 0 -0.005" size="0.09 0.05 0.004"
+                        material="mat_solar_real" rgba="1 1 1 1"/>
+
+                  <geom class="sat_visual" name="panel4_skin_top" type="box"
+                        pos="0.09 0 -0.0012" size="0.089 0.049 0.0002"
+                        material="mat_solar_real" rgba="1 1 1 1"/>
+                  <geom class="sat_visual" name="panel4_skin_bottom" type="box"
+                        pos="0.09 0 -0.0088" size="0.089 0.049 0.0002"
+                        material="mat_solar_real" rgba="1 1 1 1"
+                        euler="0 3.141593 0"/>
+
+                  <site name="panel4_tip" pos="0.18 0 0" size="0.008" rgba="1 0 0 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+
+        <!-- ===========================
+             左侧展开机构（镜像）
+             =========================== -->
+        <body name="conn_frame_L" pos="-0.08 0 0" gravcomp="1">
+        <!-- <body name="conn_frame_L" pos="-0.08 0 0" > -->
+          <joint name="hinge_root_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-0.6 0.6" ref="0"/>
+
+          <geom name="conn_geom_L" type="box" pos="-0.05 0 0" size="0.05 0.015 0.01" material="mat_frame" rgba="1 1 1 1"/>
+
+          <geom class="sat_visual" name="root_hinge_housing_L" type="cylinder"
+                pos="-0.006 0 0" euler="0 -1.570796 0" size="0.016 0.020" material="mat_frame"/>
+
+          <body name="panel1_L" pos="-0.10 0 0" gravcomp="1">
+          <!-- <body name="panel1_L" pos="-0.10 0 0" > -->
+            <joint name="hinge_1_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-1.570796 0" ref="0"/>
+
+            <!-- z stagger: +0.006 -> +0.005 -->
+            <geom name="panel1_geom_L" type="box" pos="-0.09 0  0.005" size="0.09 0.05 0.004"
+                  material="mat_solar_real" rgba="1 1 1 1"/>
+
+            <geom class="sat_visual" name="panel1_skin_top_L" type="box"
+                  pos="-0.09 0 0.0098" size="0.089 0.049 0.0002"
+                  material="mat_solar_real" rgba="1 1 1 1"/>
+            <geom class="sat_visual" name="panel1_skin_bottom_L" type="box"
+                  pos="-0.09 0 0.0012" size="0.089 0.049 0.0002"
+                  material="mat_solar_real" rgba="1 1 1 1"
+                  euler="0 3.141593 0"/>
+
+            <body name="panel2_L" pos="-0.18 0 0" gravcomp="1">
+            <!-- <body name="panel2_L" pos="-0.18 0 0" > -->
+              <joint name="hinge_2_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="0 3.141593" ref="0"/>
+
+              <!-- z stagger: -0.006 -> -0.005 -->
+              <geom name="panel2_geom_L" type="box" pos="-0.09 0 -0.005" size="0.09 0.05 0.004"
+                    material="mat_solar_real" rgba="1 1 1 1"/>
+
+              <geom class="sat_visual" name="panel2_skin_top_L" type="box"
+                    pos="-0.09 0 -0.0012" size="0.089 0.049 0.0002"
+                    material="mat_solar_real" rgba="1 1 1 1"/>
+              <geom class="sat_visual" name="panel2_skin_bottom_L" type="box"
+                    pos="-0.09 0 -0.0088" size="0.089 0.049 0.0002"
+                    material="mat_solar_real" rgba="1 1 1 1"
+                    euler="0 3.141593 0"/>
+
+              <body name="panel3_L" pos="-0.18 0 0" gravcomp="1">
+              <!-- <body name="panel3_L" pos="-0.18 0 0" > -->
+                <joint name="hinge_3_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-3.141593 0" ref="0"/>
+
+                <!-- z stagger: +0.006 -> +0.005 -->
+                <geom name="panel3_geom_L" type="box" pos="-0.09 0  0.005" size="0.09 0.05 0.004"
+                      material="mat_solar_real" rgba="1 1 1 1"/>
+
+                <geom class="sat_visual" name="panel3_skin_top_L" type="box"
+                      pos="-0.09 0 0.0098" size="0.089 0.049 0.0002"
+                      material="mat_solar_real" rgba="1 1 1 1"/>
+                <geom class="sat_visual" name="panel3_skin_bottom_L" type="box"
+                      pos="-0.09 0 0.0012" size="0.089 0.049 0.0002"
+                      material="mat_solar_real" rgba="1 1 1 1"
+                      euler="0 3.141593 0"/>
+
+                <body name="panel4_L" pos="-0.18 0 0" gravcomp="1">
+                <!-- <body name="panel4_L" pos="-0.18 0 0" > -->
+                  <joint name="hinge_4_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="0 1.570796" ref="0"/>
+
+                  <!-- z stagger: -0.006 -> -0.005 -->
+                  <geom name="panel4_geom_L" type="box" pos="-0.09 0 -0.005" size="0.09 0.05 0.004"
+                        material="mat_solar_real" rgba="1 1 1 1"/>
+
+                  <geom class="sat_visual" name="panel4_skin_top_L" type="box"
+                        pos="-0.09 0 -0.0012" size="0.089 0.049 0.0002"
+                        material="mat_solar_real" rgba="1 1 1 1"/>
+                  <geom class="sat_visual" name="panel4_skin_bottom_L" type="box"
+                        pos="-0.09 0 -0.0088" size="0.089 0.049 0.0002"
+                        material="mat_solar_real" rgba="1 1 1 1"
+                        euler="0 3.141593 0"/>
+
+                  <site name="panel4_tip_L" pos="-0.18 0 0" size="0.008" rgba="1 0 0 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+
+      </body>
+    </body>
+  </worldbody>
+
+  <tendon>
+    <fixed name="accordion">
+      <joint joint="hinge_1" coef=" 1"/>
+      <joint joint="hinge_2" coef="-2"/>
+      <joint joint="hinge_3" coef=" 2"/>
+      <joint joint="hinge_4" coef="-1"/>
+    </fixed>
+
+    <fixed name="accordion_L">
+      <joint joint="hinge_1_L" coef="-1"/>
+      <joint joint="hinge_2_L" coef=" 2"/>
+      <joint joint="hinge_3_L" coef="-2"/>
+      <joint joint="hinge_4_L" coef=" 1"/>
+    </fixed>
+  </tendon>
+
+  <actuator>
+    <motor name="m_root" joint="hinge_root" gear="1" ctrlrange="-2 2"/>
+    <motor name="m_accordion" tendon="accordion" gear="1" ctrlrange="-12 12"/>
+
+    <motor name="m_root_L" joint="hinge_root_L" gear="1" ctrlrange="-2 2"/>
+    <motor name="m_accordion_L" tendon="accordion_L" gear="1" ctrlrange="-12 12"/>
+  </actuator>
+
+</mujocoinclude>
+

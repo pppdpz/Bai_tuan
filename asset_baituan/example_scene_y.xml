@@ -1,0 +1,29 @@
+<mujoco model="Scanned Objects">
+        <compiler angle="radian" autolimits="true"/>
+<size memory="500M"/>
+    <!-- <option integrator="RK4" noslip_iterations="20" gravity="0 0 0"/> -->
+    <option integrator="RK4" noslip_iterations="20" gravity="0 0 -9.81"/>
+    <default>
+        <joint armature="0.1" damping="0.1" />
+        <default class="visual_only">
+            <geom type="mesh" contype="0" conaffinity="0" group="2" />
+        </default>
+        <default class="no_visual_collision">
+            <geom type="capsule" solimp=".9 .99 .001" solref=".015 1" group="3" />
+        </default>
+        <default class="visual_collision">
+            <geom type="mesh" solimp=".9 .99 .001" solref=".015 1" group="2" />
+        </default>
+    </default>
+
+    <include file="./tabletop/object/floor_isaac_style.xml" />
+    <include file="./satellite/satellite_carrier.xml" />
+
+
+
+    <!-- 机械臂 -->
+    <include file="./universal_robots_ur5e/ur5e_core.xml" />
+        <!-- 卫星（已经在 fragment 里改了 pos 和 euler） -->
+    <include file="./satellite/solar_array_fragment.xml"/>
+</mujoco>
+

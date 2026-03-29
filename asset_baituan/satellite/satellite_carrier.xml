@@ -1,0 +1,247 @@
+<!-- satellite_carrier.xml (MUST be wrapped by <mujocoinclude>) -->
+<mujocoinclude>
+
+  <asset>
+    <!-- <texture name="carrier_tex_solar_real" type="2d" file="satellite/solar_cells_tile.png"/> -->
+    <texture name="carrier_tex_solar_real" type="2d" file="solar_cells_tile.png"/>
+
+    <material name="carrier_mat_solar_real" texture="carrier_tex_solar_real" texuniform="true"
+              texrepeat="4 4"
+              rgba="1 1 1 1" specular="0.30" shininess="0.60" reflectance="0.10"/>
+
+    <texture name="carrier_tex_mli" type="2d" builtin="checker"
+             width="512" height="512"
+             rgb1="0.92 0.72 0.12" rgb2="0.65 0.45 0.08"/>
+    <material name="carrier_mat_mli" texture="carrier_tex_mli" texuniform="true"
+              texrepeat="6 6"
+              rgba="1 1 1 1" specular="0.60" shininess="0.80" reflectance="0.22"/>
+
+    <material name="carrier_mat_body"     rgba="0.72 0.74 0.78 1" specular="0.25" shininess="0.35" reflectance="0.08"/>
+    <material name="carrier_mat_frame"    rgba="0.12 0.12 0.12 1" specular="0.10" shininess="0.20" reflectance="0.03"/>
+    <material name="carrier_mat_radiator" rgba="0.86 0.86 0.90 1" specular="0.08" shininess="0.15" reflectance="0.02"/>
+    <material name="carrier_mat_sensor"   rgba="0.10 0.12 0.18 1" specular="0.55" shininess="0.90" reflectance="0.10"/>
+  </asset>
+
+  <default>
+    <geom type="box" density="350" friction="10 10 10"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/>
+
+    <joint damping="1.2" armature="0.01" limited="true"
+           solreflimit="0.01 1" solimplimit="0.95 0.99 0.001"/>
+
+    <default class="carrier_sat_visual">
+      <geom contype="0" conaffinity="0" density="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <!-- 你可以在这里改 pos / euler，实现“整星+太阳翼整体旋转90°” -->
+    <!-- <body name="carrier_satellite_root" pos="1 0 0.3" euler="0 0 0" gravcomp="1"> -->
+    <!-- <body name="carrier_satellite_root" pos="1 0 0.3" euler="0 0 0"> -->
+    <!-- <body name="carrier_satellite_root" pos="1 0 0.45" euler="0 0 0"> -->
+    <body name="carrier_satellite_root" pos="1 0 0.45" euler="0 0 0" gravcomp="1">
+    <!-- <joint name="carrier_free" type="free" damping="100" armature="0.0"/> -->
+    <inertial pos="0 0 0" mass="150" diaginertia="12 12 8"/>
+      <body name="carrier_satellite_base" pos="0 0 0">
+
+        <geom name="carrier_base_geom" type="box" size="0.45 0.45 0.45" material="carrier_mat_body" rgba="1 1 1 1"/>
+        <geom class="carrier_sat_visual" name="carrier_base_mli_wrap" type="box"
+              size="0.46125 0.46125 0.46125" material="carrier_mat_mli" rgba="1 1 1 0.95"/>
+        <geom class="carrier_sat_visual" name="carrier_top_deck" type="box"
+              pos="0 0 0.48375" size="0.309375 0.309375 0.045" material="carrier_mat_body" rgba="1 1 1 0.95"/>
+
+        <geom class="carrier_sat_visual" name="carrier_star_tracker_body" type="cylinder"
+              pos="0.16875 0.2925 0.534375" size="0.0675 0.10125" material="carrier_mat_sensor"/>
+        <geom class="carrier_sat_visual" name="carrier_star_tracker_lens" type="sphere"
+              pos="0.16875 0.2925 0.646875" size="0.05625" material="carrier_mat_sensor" rgba="0.03 0.06 0.10 1"/>
+
+        <geom class="carrier_sat_visual" name="carrier_antenna_1" type="cylinder"
+              pos="-0.28125 0.3375 0.365625" size="0.0225 0.3375" material="carrier_mat_frame"/>
+        <geom class="carrier_sat_visual" name="carrier_antenna_2" type="cylinder"
+              pos="-0.28125 -0.3375 0.365625" size="0.0225 0.3375" material="carrier_mat_frame"/>
+
+        <geom class="carrier_sat_visual" name="carrier_radiator_y_pos" type="box"
+              pos="0 0.466875 0.000" size="0.39375 0.0225 0.39375" material="carrier_mat_radiator"/>
+        <geom class="carrier_sat_visual" name="carrier_radiator_y_neg" type="box"
+              pos="0 -0.466875 0.000" size="0.39375 0.0225 0.39375" material="carrier_mat_radiator"/>
+
+        <!-- ===========================
+             右侧展开机构
+             =========================== -->
+        <body name="carrier_conn_frame" pos="0.45 0 0" gravcomp="1">
+        <!-- <body name="carrier_conn_frame" pos="0.45 0 0" > -->
+          <joint name="carrier_hinge_root" type="hinge" pos="0 0 0" axis="0 1 0" range="-0.6 0.6"/>
+
+          <geom name="carrier_conn_geom" type="box" pos="0.28125 0 0" size="0.28125 0.084375 0.05625" material="carrier_mat_frame" rgba="1 1 1 1"/>
+
+          <geom class="carrier_sat_visual" name="carrier_root_hinge_housing" type="cylinder"
+                pos="0.03375 0 0" euler="0 1.570796 0" size="0.09 0.1125" material="carrier_mat_frame"/>
+
+          <body name="carrier_panel1" pos="0.5625 0 0" gravcomp="1">
+          <!-- <body name="carrier_panel1" pos="0.5625 0 0" > -->
+            <joint name="carrier_hinge_1" type="hinge" pos="0 0 0" axis="0 1 0" range="-1.570796 0"/>
+
+            <geom name="carrier_panel1_geom" type="box" pos="0.50625 0 0.028125" size="0.50625 0.28125 0.0225"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+            <geom class="carrier_sat_visual" name="carrier_panel1_skin_top" type="box"
+                  pos="0.50625 0 0.055125" size="0.500625 0.275625 0.001125"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+            <geom class="carrier_sat_visual" name="carrier_panel1_skin_bottom" type="box"
+                  pos="0.50625 0 0.00675" size="0.500625 0.275625 0.001125"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"
+                  euler="0 3.141593 0"/>
+
+            <body name="carrier_panel2" pos="1.0125 0 0" gravcomp="1">
+            <!-- <body name="carrier_panel2" pos="1.0125 0 0" > -->
+              <joint name="carrier_hinge_2" type="hinge" pos="0 0 0" axis="0 1 0" range="0 3.141593"/>
+
+              <geom name="carrier_panel2_geom" type="box" pos="0.50625 0 -0.028125" size="0.50625 0.28125 0.0225"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+              <geom class="carrier_sat_visual" name="carrier_panel2_skin_top" type="box"
+                    pos="0.50625 0 -0.00675" size="0.500625 0.275625 0.001125"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+              <geom class="carrier_sat_visual" name="carrier_panel2_skin_bottom" type="box"
+                    pos="0.50625 0 -0.0495" size="0.500625 0.275625 0.001125"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"
+                    euler="0 3.141593 0"/>
+
+              <body name="carrier_panel3" pos="1.0125 0 0" gravcomp="1">
+              <!-- <body name="carrier_panel3" pos="1.0125 0 0" > -->
+                <joint name="carrier_hinge_3" type="hinge" pos="0 0 0" axis="0 1 0" range="-3.141593 0"/>
+
+                <geom name="carrier_panel3_geom" type="box" pos="0.50625 0 0.028125" size="0.50625 0.28125 0.0225"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+                <geom class="carrier_sat_visual" name="carrier_panel3_skin_top" type="box"
+                      pos="0.50625 0 0.055125" size="0.500625 0.275625 0.001125"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+                <geom class="carrier_sat_visual" name="carrier_panel3_skin_bottom" type="box"
+                      pos="0.50625 0 0.00675" size="0.500625 0.275625 0.001125"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"
+                      euler="0 3.141593 0"/>
+
+                <body name="carrier_panel4" pos="1.0125 0 0" gravcomp="1">
+                <!-- <body name="carrier_panel4" pos="1.0125 0 0" > -->
+                  <joint name="carrier_hinge_4" type="hinge" pos="0 0 0" axis="0 1 0" range="0 1.570796"/>
+
+                  <geom name="carrier_panel4_geom" type="box" pos="0.50625 0 -0.028125" size="0.50625 0.28125 0.0225"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+                  <geom class="carrier_sat_visual" name="carrier_panel4_skin_top" type="box"
+                        pos="0.50625 0 -0.00675" size="0.500625 0.275625 0.001125"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+                  <geom class="carrier_sat_visual" name="carrier_panel4_skin_bottom" type="box"
+                        pos="0.50625 0 -0.0495" size="0.500625 0.275625 0.001125"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"
+                        euler="0 3.141593 0"/>
+
+                  <site name="carrier_panel4_tip" pos="1.0125 0 0" size="0.045" rgba="1 0 0 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+
+        <!-- ===========================
+             左侧展开机构（镜像）
+             =========================== -->
+        <body name="carrier_conn_frame_L" pos="-0.45 0 0" gravcomp="1">
+        <!-- <body name="carrier_conn_frame_L" pos="-0.45 0 0" > -->
+          <joint name="carrier_hinge_root_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-0.6 0.6"/>
+
+          <geom name="carrier_conn_geom_L" type="box" pos="-0.28125 0 0" size="0.28125 0.084375 0.05625" material="carrier_mat_frame" rgba="1 1 1 1"/>
+
+          <geom class="carrier_sat_visual" name="carrier_root_hinge_housing_L" type="cylinder"
+                pos="-0.03375 0 0" euler="0 -1.570796 0" size="0.09 0.1125" material="carrier_mat_frame"/>
+
+          <body name="carrier_panel1_L" pos="-0.5625 0 0" gravcomp="1">
+          <!-- <body name="carrier_panel1_L" pos="-0.5625 0 0" > -->
+            <joint name="carrier_hinge_1_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-1.570796 0"/>
+
+            <geom name="carrier_panel1_geom_L" type="box" pos="-0.50625 0 0.028125" size="0.50625 0.28125 0.0225"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+            <geom class="carrier_sat_visual" name="carrier_panel1_skin_top_L" type="box"
+                  pos="-0.50625 0 0.055125" size="0.500625 0.275625 0.001125"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+            <geom class="carrier_sat_visual" name="carrier_panel1_skin_bottom_L" type="box"
+                  pos="-0.50625 0 0.00675" size="0.500625 0.275625 0.001125"
+                  material="carrier_mat_solar_real" rgba="1 1 1 1"
+                  euler="0 3.141593 0"/>
+
+            <body name="carrier_panel2_L" pos="-1.0125 0 0" gravcomp="1">
+            <!-- <body name="carrier_panel2_L" pos="-1.0125 0 0" > -->
+              <joint name="carrier_hinge_2_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="0 3.141593"/>
+
+              <geom name="carrier_panel2_geom_L" type="box" pos="-0.50625 0 -0.028125" size="0.50625 0.28125 0.0225"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+              <geom class="carrier_sat_visual" name="carrier_panel2_skin_top_L" type="box"
+                    pos="-0.50625 0 -0.00675" size="0.500625 0.275625 0.001125"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+              <geom class="carrier_sat_visual" name="carrier_panel2_skin_bottom_L" type="box"
+                    pos="-0.50625 0 -0.0495" size="0.500625 0.275625 0.001125"
+                    material="carrier_mat_solar_real" rgba="1 1 1 1"
+                    euler="0 3.141593 0"/>
+
+              <body name="carrier_panel3_L" pos="-1.0125 0 0" gravcomp="1">
+              <!-- <body name="carrier_panel3_L" pos="-1.0125 0 0" > -->
+                <joint name="carrier_hinge_3_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="-3.141593 0"/>
+
+                <geom name="carrier_panel3_geom_L" type="box" pos="-0.50625 0 0.028125" size="0.50625 0.28125 0.0225"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+                <geom class="carrier_sat_visual" name="carrier_panel3_skin_top_L" type="box"
+                      pos="-0.50625 0 0.055125" size="0.500625 0.275625 0.001125"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+                <geom class="carrier_sat_visual" name="carrier_panel3_skin_bottom_L" type="box"
+                      pos="-0.50625 0 0.00675" size="0.500625 0.275625 0.001125"
+                      material="carrier_mat_solar_real" rgba="1 1 1 1"
+                      euler="0 3.141593 0"/>
+
+                <body name="carrier_panel4_L" pos="-1.0125 0 0" gravcomp="1">
+                <!-- <body name="carrier_panel4_L" pos="-1.0125 0 0" > -->
+                  <joint name="carrier_hinge_4_L" type="hinge" pos="0 0 0" axis="0 -1 0" range="0 1.570796"/>
+
+                  <geom name="carrier_panel4_geom_L" type="box" pos="-0.50625 0 -0.028125" size="0.50625 0.28125 0.0225"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+
+                  <geom class="carrier_sat_visual" name="carrier_panel4_skin_top_L" type="box"
+                        pos="-0.50625 0 -0.00675" size="0.500625 0.275625 0.001125"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"/>
+                  <geom class="carrier_sat_visual" name="carrier_panel4_skin_bottom_L" type="box"
+                        pos="-0.50625 0 -0.0495" size="0.500625 0.275625 0.001125"
+                        material="carrier_mat_solar_real" rgba="1 1 1 1"
+                        euler="0 3.141593 0"/>
+
+                  <site name="carrier_panel4_tip_L" pos="-1.0125 0 0" size="0.045" rgba="1 0 0 1"/>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+
+      </body>
+    
+      <!-- UR5e mounted as a true child of the carrier satellite -->
+      <body name="carrier_ur5e_mount_body" pos="0 0 0.445" quat="1 0 0 0">
+        <include file="../universal_robots_ur5e/ur5e_embed.xml"/>
+      </body>
+</body>
+      <!-- Fixed cameras (restore after removing table) -->
+  <body name="agentview" pos="1.56837 0.44492 1.45327" quat="0.61688 0.32936 0.23918 0.67372">
+    <camera mode="fixed" name="agentview"/>
+  </body>
+
+  <body name="topview" pos="0.52195 0.07022 3.20468" quat="0.60498 0.65081 0.27173 0.36888">
+    <camera mode="fixed" name="topview"/>
+  </body>
+
+  <body name="sideview" pos="-1.06603 1.19775 1.55339" quat="0.56836 0.29099 0.23225 0.74815">
+    <camera mode="fixed" name="sideview"/>
+  </body>
+
+  </worldbody>
+</mujocoinclude>

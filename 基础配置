@@ -1,0 +1,16 @@
+export http_proxy=http://127.0.0.1:7897
+export https_proxy=http://127.0.0.1:7897
+
+# 激活conda环境
+conda activate roboverse
+cd RoboVerse
+
+
+#激活uv环境
+source ~/RoboVerse/.venv/bin/activate
+
+cd ~/RoboVerse
+source .venv/bin/activate
+
+uv装pip
+python -m pip install yourdfpy
