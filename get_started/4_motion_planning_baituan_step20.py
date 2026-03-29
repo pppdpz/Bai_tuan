@@ -57,7 +57,7 @@ class Args:
     # ===== 新增：抓取点位偏移参数 =====
     grasp_offset_x: float = 0.0      # X方向偏移（米）
     grasp_offset_y: float = 0.0      # Y方向偏移（米）
-    grasp_offset_z: float = -0.0    # Z方向偏移（米），负值表示向下
+    grasp_offset_z: float = -0.01    # Z方向偏移（米），负值表示向下
     use_normal_offset: bool = False  # 是否使用法向偏移（默认禁用）
     normal_offset_dist: float = 0.01 # 沿法向偏移距离（米）
 
@@ -469,7 +469,6 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
     # 注意：panel4_tip_L 初始位置是 [0.3000, 0.2400, 1.2800]
     approach_pos_pinch = [0.3, 0.24, 1.43]   # 在抓取点上方 15cm
     grasp_pos_pinch = [0.3, 0.24, 1.28]      # 对准 panel4_tip_L
-    # grasp_pos_pinch = [0.3, 0.4, 1.28]      # 对准 panel4_tip_L
     deploy_pos_pinch = [0.3, -0.30, 1.30]    # 沿 -Y 方向拉动 54cm
     retract_pos_pinch = [0.3, -0.30, 1.40]   # 上抬 10cm
 
@@ -543,10 +542,6 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
     deploy_pos = deploy_pos_pinch
     retract_pos = retract_pos_pinch
 
-    inset = 0.04  # 2cm
-    # 假设“向内”是世界系 -y；如果方向反了就改成 +inset
-    grasp_pos_inset = grasp_pos + np.array([0.0, inset, 0.0])
-
     # ===== 阶段1a: 移动到中间点 (步数 0-30) =====
     if step < 30:
         t = step / 30.0
@@ -582,26 +577,27 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         ]
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-        gripper_width = 1.0  # 保持打开    
-
-    # ===== 阶段3: 抓取 (70-90) =====
+        gripper_width = 1.0  # 保持打开
+    
+    # ===== 阶段3: 抓取 (步数 70-90) =====
     elif step < 90:
         t = (step - 70) / 20.0
-        ee_pos = grasp_pos_inset
-        ee_quat = tcp_quat_wxyz
-        gripper_width = 1.0 - t * 1.0
+        # 位置保持不变
+        ee_pos = grasp_pos
+        ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-    # ===== 阶段3.5: 抓取后稳固保持 (90-120) =====
+        # 夹爪逐渐闭合，从1.0到0.2（留20%开口，避免夹坏太阳能板）
+        gripper_width = 1.0 - t * 0.8
+        
+    # ===== 新增：阶段3.5: 抓取后稳固保持 (步数 90-120) =====
     elif step < 120:
-        ee_pos = grasp_pos_inset
+        ee_pos = grasp_pos
         ee_quat = tcp_quat_wxyz
-        gripper_width = 0.0
-
-
-    # ===== 阶段4: 展开 (步数 120-320) ⭐ 关键阶段 =====
-    # 将原来的80步延长到200步，放慢展开速度
-    elif step < 320:
-        t = (step - 120) / 200.0
+        gripper_width = 0.2  # 保持闭合，等待力矩稳定
+    
+    # ===== 阶段4: 展开 (步数 120-200) ⭐ 关键阶段 =====
+    elif step < 200:
+        t = (step - 120) / 80.0
         # 使用S曲线插值，提供平滑的运动
         t_smooth = smooth_interpolation(t)
         # 从抓取位置平滑移动到展开位置
@@ -612,30 +608,28 @@ def get_trajectory_targets(step, device, robot_cfg, tcp_quat_wxyz, panel_tip_wor
         ]
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-        # gripper_width = 0.2  # 保持闭合状态
-        gripper_width = 0.0  # 保持闭合状态
+        gripper_width = 0.2  # 保持闭合状态
     
-    # ===== 阶段5: 释放 (步数 320-340) =====
-    elif step < 340:
-        t = (step - 320) / 20.0
+    # ===== 阶段5: 释放 (步数 200-220) =====
+    elif step < 220:
+        t = (step - 200) / 20.0
         # 位置保持在展开位置
         ee_pos = deploy_pos
         ee_quat = tcp_quat_wxyz  # 使用真实的 TCP 姿态 [w,x,y,z]
 
-        # 夹爪逐渐打开，从0.0到1.0
-        # gripper_width = 0.2 + t * 0.8
-        gripper_width = 0.0 + t * 1.0
+        # 夹爪逐渐打开，从0.2到1.0
+        gripper_width = 0.2 + t * 0.8
         
-    # ===== 新增：阶段5.5: 释放后稳固保持 (步数 340-370) =====
-    elif step < 370:
+    # ===== 新增：阶段5.5: 释放后稳固保持 (步数 220-250) =====
+    elif step < 250:
         # 等待手指完全离物
         ee_pos = deploy_pos
         ee_quat = tcp_quat_wxyz
         gripper_width = 1.0
     
-    # ===== 阶段6: 撤离 (步数 370-400) =====
-    elif step < 400:
-        t = (step - 370) / 30.0
+    # ===== 阶段6: 撤离 (步数 250-280) =====
+    elif step < 280:
+        t = (step - 250) / 30.0
         # 从展开位置移动到撤离位置
         ee_pos = [
             deploy_pos[0] + t * (retract_pos[0] - deploy_pos[0]),
@@ -876,7 +870,7 @@ print("\n" + "="*70)
 
 
 # 修改主循环 - 每步都求解IK，实现真正的笛卡尔空间轨迹跟踪
-for step in range(450):
+for step in range(300):
     states = handler.get_states()
 
     # ===== 步骤1: 读取 panel4_tip_L 位置并生成轨迹目标 =====
@@ -896,6 +890,11 @@ for step in range(450):
     # 扩展目标到所有环境
     ee_pos_batch_world = ee_pos_target.repeat(args.num_envs, 1)
     ee_quat_batch_world = ee_quat_target.repeat(args.num_envs, 1)
+
+    
+    # 方案A：使用世界坐标（实验）
+    # ee_pos_base = ee_pos_batch_world[0:1]
+    # ee_quat_base = ee_quat_batch_world[0:1]
     
     ee_pos_base, ee_quat_base = world_pose_to_base_pose(
         ee_pos_batch_world[0], 

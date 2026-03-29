@@ -28,6 +28,9 @@
     <geom type="box" density="350" friction="10 10 10"
           solref="0.002 1" solimp="0.9 0.95 0.001"/>
 
+    <!-- <geom type="box" density="350" friction="20 20 20"
+          solref="0.002 1" solimp="0.9 0.95 0.001"/> -->
+
     <joint damping="1.2" armature="0.01" limited="true"
            solreflimit="0.01 1" solimplimit="0.95 0.99 0.001"/>
 
