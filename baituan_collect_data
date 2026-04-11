@@ -42,3 +42,7 @@ python get_started/visualize_scene_y.py --cam-pos 2.0 -2.0 2.0 --cam-look-at 0.0
 
 # 自定义截图保存路径
 python get_started/visualize_scene_y.py --save-path get_started/output/my_view.png
+
+
+# 采集数据
+python get_started/baituan_collect_data_lerobot.py
