@@ -3,7 +3,7 @@ conda activate roboverse
 cd RoboVerse
 
 # 资产路径
-/home/e0/RoboVerse/asset_baituan 
+/../RoboVerse/asset_baituan 
 
 # Tutorial 4: Motion Planning For Baituan
 python get_started/4_motion_planning_baituan.py  --sim mujoco --headless
@@ -20,15 +20,15 @@ python get_started/4_motion_planning_baituan.py --sim mujoco --headless
 如果后续需要保留联动行为，需要在上层控制逻辑中同步发送相同的指令给 right_driver_joint 和 left_driver_joint。但对于当前让脚本跑通来说，这是最直接的方案
 
 #机械臂ur5e的资产
-/home/e0/RoboVerse/roboverse_data/robots/robotiq_2f85
-/home/e0/RoboVerse/roboverse_data/robots/universal_robots_ur5e
+/../RoboVerse/roboverse_data/robots/robotiq_2f85
+/../RoboVerse/roboverse_data/robots/universal_robots_ur5e
 
 
 # Tutorial 4: Motion Planning For Baituan
 python get_started/4_motion_planning_baituan_jingjian.py  --sim mujoco --headless
 
 #精简版
-/home/e0/RoboVerse/get_started/inline_scene_adapter.py,分装逻辑
+/../RoboVerse/get_started/inline_scene_adapter.py,分装逻辑
 
 #查看现有场景
 # 交互式窗口查看（默认，可鼠标旋转/缩放）
@@ -46,3 +46,9 @@ python get_started/visualize_scene_y.py --save-path get_started/output/my_view.p
 
 # 采集数据
 python get_started/baituan_collect_data_lerobot.py
+
+# 采集 2 条相同轨迹
+python get_started/baituan_collect_data_lerobot_multi.py --num_episodes 2
+
+# 采集 10 条、每条随机偏移 ±0.03m
+python get_started/baituan_collect_data_lerobot_multi.py --num_episodes 10 --randomize --random_offset_range 0.03

@@ -1,7 +1,7 @@
 ## 8. 最小可执行模板
 
 ```bash
-cd /home/e0/RoboVerse
+cd /../RoboVerse
 git status
 git add -A
 git commit -m "chore: update project files"
