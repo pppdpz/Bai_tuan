@@ -59,6 +59,7 @@ class Args:
     normal_offset_dist: float = 0.01
     randomize: bool = False
     random_offset_range: float = 0.02
+    overwrite: bool = False
 
 
 # ============ 常量定义 ============
@@ -278,40 +279,55 @@ def main():
 
     # ------------------ LeRobot Dataset 初始化（整个采集只做一次） ------------------
     dataset_dir = "get_started/output/lerobot_dataset"
-    if os.path.exists(dataset_dir):
-        shutil.rmtree(dataset_dir)
+    info_json = os.path.join(dataset_dir, "meta", "info.json")
 
-    features = {
-        "observation.state": {
-            "dtype": "float32",
-            "shape": (7,),
-            "names": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper"]
-        },
-        "observation.images.main_cam": {
-            "dtype": "video",
-            "shape": (3, 1024, 1024),
-            "names": ["c", "h", "w"]
-        },
-        "action": {
-            "dtype": "float32",
-            "shape": (7,),
-            "names": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper"]
-        }
-    }
+    if args.overwrite and os.path.exists(dataset_dir):
+        shutil.rmtree(dataset_dir)
+        log.info("Overwrite mode: deleted existing dataset")
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    dataset = LeRobotDataset.create(
-        repo_id="local_user/baituan_solar_deployment",
-        fps=50,
-        features=features,
-        use_videos=True,
-        root=dataset_dir,
-    )
+
+    if os.path.exists(info_json):
+        dataset = LeRobotDataset.resume(
+            repo_id="local_user/baituan_solar_deployment",
+            root=dataset_dir,
+        )
+        existing_episodes = dataset.meta.total_episodes
+        log.info(f"Resuming: found {existing_episodes} existing episodes, "
+                 f"new episodes will be {existing_episodes}~{existing_episodes + args.num_episodes - 1}")
+    else:
+        features = {
+            "observation.state": {
+                "dtype": "float32",
+                "shape": (7,),
+                "names": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper"]
+            },
+            "observation.images.main_cam": {
+                "dtype": "video",
+                "shape": (3, 1024, 1024),
+                "names": ["c", "h", "w"]
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (7,),
+                "names": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper"]
+            }
+        }
+        dataset = LeRobotDataset.create(
+            repo_id="local_user/baituan_solar_deployment",
+            fps=50,
+            features=features,
+            use_videos=True,
+            root=dataset_dir,
+        )
+        existing_episodes = 0
+        log.info("Creating new dataset")
     # ---------------------------------------------------------------------------
 
     # ==================== Episode 循环 ====================
     for episode_idx in range(args.num_episodes):
-        log.info(f"=== Collecting episode {episode_idx}/{args.num_episodes - 1} ===")
+        global_ep_idx = existing_episodes + episode_idx
+        log.info(f"=== Collecting episode {global_ep_idx} (local {episode_idx}/{args.num_episodes - 1}) ===")
 
         # ---- 1. 每个 episode 可选随机化抓取偏移 ----
         if args.randomize and episode_idx > 0:
@@ -323,6 +339,7 @@ def main():
                      f"x={args.grasp_offset_x:.4f} y={args.grasp_offset_y:.4f} z={args.grasp_offset_z:.4f}")
 
         # ---- 2. 重置仿真状态 ----
+        mj.mj_resetData(model, data)
         handler.set_states(init_states)
 
         # ---- 3. 折叠太阳翼 ----
@@ -345,7 +362,7 @@ def main():
         # ---- 5. 获取初始观测 & 创建当前 episode 的 obs_saver ----
         obs = handler.get_states(mode="tensor")
         obs_saver = ObsSaver(
-            video_path=f"get_started/output/4_motion_planning_baituan_{args.sim}_ep{episode_idx}.mp4"
+            video_path=f"get_started/output/4_motion_planning_baituan_{args.sim}_ep{global_ep_idx}.mp4"
         )
         obs_saver.add(obs)
 
@@ -437,12 +454,14 @@ def main():
         # ---- 7. 当前 episode 结束：保存视频 + 保存 episode ----
         obs_saver.save()
         dataset.save_episode()
-        log.info(f"Episode {episode_idx} saved (episode_index={episode_idx}, 450 frames)")
+        log.info(f"Episode {global_ep_idx} saved (episode_index={global_ep_idx}, 450 frames)")
 
     # ==================== 所有 episode 采完后 finalize ====================
     dataset.finalize()
-    log.info(f"LeRobot Dataset finalized: {args.num_episodes} episodes, "
-             f"{args.num_episodes * 450} total frames → {dataset_dir}")
+    total_eps = existing_episodes + args.num_episodes
+    log.info(f"LeRobot Dataset finalized: {total_eps} total episodes "
+             f"({existing_episodes} existing + {args.num_episodes} new), "
+             f"{total_eps * 450} total frames → {dataset_dir}")
 
     # 清理
     if hasattr(handler, "close"):
